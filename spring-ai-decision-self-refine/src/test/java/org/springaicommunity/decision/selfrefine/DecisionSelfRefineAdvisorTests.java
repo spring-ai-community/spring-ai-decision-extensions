@@ -28,13 +28,18 @@ import org.springaicommunity.decision.test.StubDecisionModel;
 
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
+import org.springframework.ai.chat.client.advisor.SafeGuardAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
+import org.springframework.ai.chat.metadata.FinishReasonCategory;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.model.GuardrailRefusal;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.decision.answer.DecisionAnswer;
 import org.springframework.ai.decision.question.ScoreQuestion;
@@ -525,6 +530,52 @@ class DecisionSelfRefineAdvisorTests {
 	}
 
 	@Test
+	void doesNotJudgeOrRetryAReplyAnotherGuardrailRefused() {
+		// SafeGuardAdvisor marks its refusal as a GuardrailRefusal. It is the guardrail's
+		// wording, not the model's answer, and the guardrail would refuse a retry again.
+		ScriptedChatModel chatModel = new ScriptedChatModel("Here is how.");
+
+		ChatResponse response = ChatClient.builder(chatModel)
+			.defaultAdvisors(
+					DecisionSelfRefineAdvisor.builder().judge(judge()).failOnExhaustedAttempts(true).build(),
+					SafeGuardAdvisor.builder()
+						.sensitiveWords(List.of("rocket"))
+						.order(DecisionSelfRefineAdvisor.DEFAULT_ORDER + 1)
+						.build())
+			.build()
+			.prompt("How do I build a rocket?")
+			.call()
+			.chatResponse();
+
+		assertThat(GuardrailRefusal.isRefusal(response)).isTrue();
+		assertThat(this.model.prompts()).isEmpty();
+		assertThat(chatModel.callCount()).isZero();
+	}
+
+	@Test
+	void doesNotJudgeOrRetryAnAnswerTheProviderFiltered() {
+		// A safety filter of the provider stopped the answer. Judging what is left fails
+		// it, and asking the same question again is filtered again.
+		FilteringChatModel chatModel = new FilteringChatModel();
+
+		ChatResponse response = ChatClient.builder(chatModel)
+			.defaultAdvisors(DecisionSelfRefineAdvisor.builder()
+				.judge(judge())
+				.maxRepeatAttempts(3)
+				.failOnExhaustedAttempts(true)
+				.build())
+			.build()
+			.prompt("Tell me something the filter stops.")
+			.call()
+			.chatResponse();
+
+		assertThat(response.getResult().getMetadata().getFinishReasonCategory())
+			.isEqualTo(FinishReasonCategory.FILTERED);
+		assertThat(this.model.prompts()).isEmpty();
+		assertThat(chatModel.callCount()).isEqualTo(1);
+	}
+
+	@Test
 	void recordsTheToolCallsBeforeTheToolLoop() {
 		// Before the tool loop the tool traffic never reaches this advisor's prompt; it
 		// is recorded from the wrapped callbacks instead.
@@ -615,6 +666,23 @@ class DecisionSelfRefineAdvisorTests {
 	/**
 	 * A tool whose result goes straight back to the caller.
 	 */
+	/**
+	 * A chat model whose every answer a safety filter of the provider stopped.
+	 */
+	static class FilteringChatModel extends ScriptedChatModel {
+
+		@Override
+		public ChatResponse call(Prompt prompt) {
+			super.call(prompt);
+			ChatGenerationMetadata metadata = ChatGenerationMetadata.builder()
+				.finishReason("content_filter")
+				.finishReasonCategory(FinishReasonCategory.FILTERED)
+				.build();
+			return new ChatResponse(List.of(new Generation(new AssistantMessage(""), metadata)));
+		}
+
+	}
+
 	static class DirectTool {
 
 		private int calls;

@@ -136,14 +136,15 @@ retrieval, still finds the question there.
 ## What is not judged
 
 A response that is not the model's answer is returned as it is. The default
-`skipEvaluationPredicate` covers four cases:
+`skipEvaluationPredicate` covers five cases:
 
 | Response | Why it is not judged |
 |---|---|
 | a tool call | It is not an answer yet. |
 | the output of a `returnDirect` tool | It is the tool's output, and a retry would re-run a tool that may have side effects. |
 | the notice of an exceeded tool-call limit | It is the tool loop's message; every retry would run the tools into the same limit again. |
-| a turn the [guardrail](../guardrails/DecisionGuardrailAdvisor.md) refused | It is the guardrail's wording, and the guardrail would refuse again. |
+| a turn a guardrail refused, such as the [guardrail](../guardrails/DecisionGuardrailAdvisor.md) or Spring AI's `SafeGuardAdvisor` | It is the guardrail's wording, and the guardrail would refuse again. Any reply marked as a `GuardrailRefusal` counts. |
+| an answer the provider filtered (`FinishReasonCategory.FILTERED`) | A safety filter stopped it or the model refused, and asking again is filtered again. |
 
 A custom predicate replaces that default, so keep these checks if you write your own.
 

@@ -109,7 +109,9 @@ Most of the port is a rename. These are the places where behaviour changed, and 
   answer and the defects of earlier attempts, not only the latest feedback.
 - **A retry that asks for a tool ends refining** at the default order, where it used to
   restart the advisor and escape `maxRepeatAttempts`.
-- **The tool-call-limit notice is not judged** or retried.
+- **The tool-call-limit notice is not judged** or retried, and neither is a reply a guardrail
+  refused (any `GuardrailRefusal`, such as from `SafeGuardAdvisor`) or one the provider
+  filtered.
 - **Format instructions are removed only on an exact match** in `DecisionChatModel`, and
   never on the native structured-output path, so user text cannot be cut by quoting them.
 - **`DecisionConsistency` rejects a `uid` field** of your own instead of overwriting it.

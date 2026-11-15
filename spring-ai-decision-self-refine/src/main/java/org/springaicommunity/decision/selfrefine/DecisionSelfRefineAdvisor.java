@@ -54,6 +54,8 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.metadata.FinishReasonCategory;
+import org.springframework.ai.chat.model.GuardrailRefusal;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
@@ -140,9 +142,11 @@ import org.springframework.util.StringUtils;
  * <h3>What is not judged</h3>
  *
  * A response that is not the model's answer is returned as it is: a tool call, the output
- * of a {@code returnDirect} tool, a turn the {@code DecisionGuardrailAdvisor} refused,
- * and the notice the tool loop returns when a tool call limit is exceeded. Retrying any
- * of them would repeat tool calls without changing the outcome.
+ * of a {@code returnDirect} tool, a turn a guardrail refused (a {@code GuardrailRefusal}
+ * such as the {@code DecisionGuardrailAdvisor} returns), an answer the provider filtered
+ * ({@code FinishReasonCategory.FILTERED}), and the notice the tool loop returns when a
+ * tool call limit is exceeded. Retrying any of them would repeat the same calls without
+ * changing the outcome.
  *
  * <h3>When judging itself fails</h3>
  *
@@ -447,11 +451,24 @@ public class DecisionSelfRefineAdvisor implements CallAdvisor, StreamAdvisor {
 	}
 
 	/**
-	 * A turn the guardrail refused carries its words, not the model's answer. Judging it
-	 * would fail it, and retrying it cannot help: the guardrail would refuse again.
+	 * A turn a guardrail refused carries its words, not the model's answer. Judging it
+	 * would fail it, and retrying it cannot help: the guardrail would refuse again. Any
+	 * guardrail that marks its refusal as a {@link GuardrailRefusal} is recognised, such
+	 * as the {@code DecisionGuardrailAdvisor} or Spring AI's {@code SafeGuardAdvisor}.
 	 */
-	private static boolean isGuardrailRefusal(ChatClientResponse response) {
-		return response.context().containsKey(DecisionContextKeys.GUARDRAIL_OUTCOME);
+	static boolean isGuardrailRefusal(ChatClientResponse response) {
+		return GuardrailRefusal.isRefusal(response.chatResponse())
+				|| response.context().containsKey(DecisionContextKeys.GUARDRAIL_OUTCOME);
+	}
+
+	/**
+	 * A safety filter of the provider stopped the answer, or the model refused. Judging
+	 * the remains would fail them, and asking the same question again is filtered again.
+	 */
+	static boolean isContentFiltered(ChatClientResponse response) {
+		return response.chatResponse() != null && response.chatResponse().getResult() != null
+				&& response.chatResponse().getResult().getMetadata().getFinishReasonCategory()
+						== FinishReasonCategory.FILTERED;
 	}
 
 	/**
@@ -678,7 +695,7 @@ public class DecisionSelfRefineAdvisor implements CallAdvisor, StreamAdvisor {
 		private BiPredicate<ChatClientRequest, ChatClientResponse> skipEvaluationPredicate = (request,
 				response) -> response.chatResponse() == null || response.chatResponse().hasToolCalls()
 						|| isToolResultReturnedDirectly(response) || isToolCallLimitExceeded(response)
-						|| isGuardrailRefusal(response);
+						|| isGuardrailRefusal(response) || isContentFiltered(response);
 
 		private JudgeErrorPolicy judgeErrorPolicy = JudgeErrorPolicy.FAIL_OPEN;
 
