@@ -1910,7 +1910,7 @@ in the one user message: an advisor further in that reads the last user message,
 retrieval, still finds the question there.</p>
 <h2 id="what-is-not-judged">What is not judged<a class="headerlink" href="#what-is-not-judged" title="Permanent link">&para;</a></h2>
 <p>A response that is not the model's answer is returned as it is. The default
-<code>skipEvaluationPredicate</code> covers four cases:</p>
+<code>skipEvaluationPredicate</code> covers five cases:</p>
 <table>
 <thead>
 <tr>
@@ -1932,8 +1932,12 @@ retrieval, still finds the question there.</p>
 <td>It is the tool loop's message; every retry would run the tools into the same limit again.</td>
 </tr>
 <tr>
-<td>a turn the <a href="../../guardrails/DecisionGuardrailAdvisor/">guardrail</a> refused</td>
-<td>It is the guardrail's wording, and the guardrail would refuse again.</td>
+<td>a turn a guardrail refused, such as the <a href="../../guardrails/DecisionGuardrailAdvisor/">guardrail</a> or Spring AI's <code>SafeGuardAdvisor</code></td>
+<td>It is the guardrail's wording, and the guardrail would refuse again. Any reply marked as a <code>GuardrailRefusal</code> counts.</td>
+</tr>
+<tr>
+<td>an answer the provider filtered (<code>FinishReasonCategory.FILTERED</code>)</td>
+<td>A safety filter stopped it or the model refused, and asking again is filtered again.</td>
 </tr>
 </tbody>
 </table>

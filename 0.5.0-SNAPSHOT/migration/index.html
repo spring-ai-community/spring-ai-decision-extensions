@@ -1771,7 +1771,9 @@ This project is the same components re-implemented on that API.</p>
   answer and the defects of earlier attempts, not only the latest feedback.</li>
 <li><strong>A retry that asks for a tool ends refining</strong> at the default order, where it used to
   restart the advisor and escape <code>maxRepeatAttempts</code>.</li>
-<li><strong>The tool-call-limit notice is not judged</strong> or retried.</li>
+<li><strong>The tool-call-limit notice is not judged</strong> or retried, and neither is a reply a guardrail
+  refused (any <code>GuardrailRefusal</code>, such as from <code>SafeGuardAdvisor</code>) or one the provider
+  filtered.</li>
 <li><strong>Format instructions are removed only on an exact match</strong> in <code>DecisionChatModel</code>, and
   never on the native structured-output path, so user text cannot be cut by quoting them.</li>
 <li><strong><code>DecisionConsistency</code> rejects a <code>uid</code> field</strong> of your own instead of overwriting it.</li>
