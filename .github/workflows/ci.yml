@@ -20,5 +20,7 @@ jobs:
 
       # `verify` runs the offline suite only. The *IT tests call a real decision model,
       # so they stay behind the integration-tests profile.
+      # The cache is keyed on the poms only, so -U keeps the Spring AI snapshots
+      # it restores from going stale.
       - name: Build
-        run: ./mvnw -B verify
+        run: ./mvnw -B -U verify
