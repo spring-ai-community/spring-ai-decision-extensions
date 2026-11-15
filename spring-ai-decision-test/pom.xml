@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>org.springaicommunity</groupId>
+		<artifactId>spring-ai-decision-extensions-parent</artifactId>
+		<version>0.5.0-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>spring-ai-decision-test</artifactId>
+	<packaging>jar</packaging>
+
+	<name>Spring AI Decision Extensions :: Test</name>
+	<description>Test support for code built on the Spring AI DecisionModel API: a scripted DecisionModel, a scripted ChatModel and prompt assertions</description>
+	<url>https://github.com/spring-ai-community/spring-ai-decision-extensions</url>
+
+	<scm>
+		<url>https://github.com/spring-ai-community/spring-ai-decision-extensions</url>
+		<connection>git://github.com/spring-ai-community/spring-ai-decision-extensions.git</connection>
+		<developerConnection>git@github.com:spring-ai-community/spring-ai-decision-extensions.git</developerConnection>
+	</scm>
+
+	<licenses>
+		<license>
+			<name>Apache License 2.0</name>
+			<url>https://www.apache.org/licenses/LICENSE-2.0</url>
+		</license>
+	</licenses>
+
+	<developers>
+		<developer>
+			<name>Christian Tzolov</name>
+		</developer>
+	</developers>
+
+	<dependencies>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-model</artifactId>
+		</dependency>
+		<!-- PromptField asserts on the fields of a prompt by JSON path, with Hamcrest matchers and AssertJ. -->
+		<dependency>
+			<groupId>com.jayway.jsonpath</groupId>
+			<artifactId>json-path</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.hamcrest</groupId>
+			<artifactId>hamcrest</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.springframework.boot</groupId>
+			<artifactId>spring-boot-starter-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>io.projectreactor</groupId>
+			<artifactId>reactor-test</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+</project>

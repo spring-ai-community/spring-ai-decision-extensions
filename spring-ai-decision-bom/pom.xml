@@ -1,0 +1,115 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+		 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+		 xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<parent>
+		<groupId>org.springaicommunity</groupId>
+		<artifactId>spring-ai-decision-extensions-parent</artifactId>
+		<version>0.5.0-SNAPSHOT</version>
+	</parent>
+
+	<artifactId>spring-ai-decision-bom</artifactId>
+	<packaging>pom</packaging>
+
+	<name>Spring AI Decision Extensions :: BOM</name>
+	<description>Bill of Materials (BOM) for the Spring AI Decision Extensions modules</description>
+	<url>https://github.com/spring-ai-community/spring-ai-decision-extensions</url>
+
+	<scm>
+		<url>https://github.com/spring-ai-community/spring-ai-decision-extensions</url>
+		<connection>git://github.com/spring-ai-community/spring-ai-decision-extensions.git</connection>
+		<developerConnection>git@github.com:spring-ai-community/spring-ai-decision-extensions.git</developerConnection>
+	</scm>
+
+	<licenses>
+		<license>
+			<name>Apache License 2.0</name>
+			<url>https://www.apache.org/licenses/LICENSE-2.0</url>
+		</license>
+	</licenses>
+
+	<developers>
+		<developer>
+			<name>Christian Tzolov</name>
+		</developer>
+	</developers>
+
+	<dependencyManagement>
+		<dependencies>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-common</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-judge</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-self-refine</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-patterns</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-guardrail</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-chat</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>org.springaicommunity</groupId>
+				<artifactId>spring-ai-decision-test</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
+
+	<build>
+		<plugins>
+			<!--
+				Same flattening as the other modules, except that the dependencyManagement
+				section is the whole point of a BOM and must survive it. Only the versions
+				listed above are published: the Spring Boot and Spring AI BOMs the parent
+				imports are not passed on to consumers.
+			-->
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>flatten-maven-plugin</artifactId>
+				<executions>
+					<execution>
+						<id>flatten</id>
+						<phase>process-resources</phase>
+						<goals>
+							<goal>flatten</goal>
+						</goals>
+						<configuration>
+							<updatePomFile>true</updatePomFile>
+							<flattenMode>ossrh</flattenMode>
+							<pomElements>
+								<distributionManagement>remove</distributionManagement>
+								<dependencyManagement>keep</dependencyManagement>
+								<repositories>remove</repositories>
+								<scm>keep</scm>
+								<url>keep</url>
+								<organization>resolve</organization>
+							</pomElements>
+						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+</project>

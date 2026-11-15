@@ -1,0 +1,102 @@
+site_name: Spring AI Decision Extensions
+site_description: A model-as-a-judge, self-refine and guardrail advisors, and a chat model adapter, built on the Spring AI DecisionModel API
+repo_url: https://github.com/spring-ai-community/spring-ai-decision-extensions
+repo_name: spring-ai-community/spring-ai-decision-extensions
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  logo: images/logo2.png
+  favicon: images/logo2.png
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.instant.progress
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.top
+    - navigation.path
+    - navigation.indexes
+    - toc.follow
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link
+
+nav:
+  - Home: index.md
+  - Concepts:
+    - Decision Models: concepts/decision-models.md
+    - Providers: concepts/providers.md
+    - Confidence: concepts/confidence.md
+  - Model-as-a-Judge:
+    - DecisionJudge: judge/DecisionJudge.md
+    - DecisionEvaluator: judge/DecisionEvaluator.md
+  - Self-Refine:
+    - DecisionSelfRefineAdvisor: self-refine/DecisionSelfRefineAdvisor.md
+  - Guardrails:
+    - DecisionGuardrailAdvisor: guardrails/DecisionGuardrailAdvisor.md
+  - Chat Model:
+    - DecisionChatModel (experimental): chat/DecisionChatModel.md
+  - Composing Decisions:
+    - DecisionConfidenceGate: patterns/DecisionConfidenceGate.md
+    - DecisionConsistency: patterns/DecisionConsistency.md
+    - DecisionCompositeScore: patterns/DecisionCompositeScore.md
+  - Testing:
+    - StubDecisionModel: testing/StubDecisionModel.md
+  - Coming from spring-ai-typesafe: migration.md
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.mark
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  # The docs.yml workflow publishes with `mike`, which needs this provider for the
+  # version selector to appear in the header.
+  version:
+    provider: mike
+    default:
+      - latest-snapshot
+      - latest
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/spring-ai-community/spring-ai-decision-extensions
+  generator: false
+
+plugins:
+  - search
