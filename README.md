@@ -11,6 +11,8 @@ on the API and not on a provider.
 > [!NOTE]
 > Ported from [spring-ai-typesafe](https://github.com/spring-ai-community/spring-ai-typesafe),
 > where these components were tied to the TypeSafe client. Not released yet.
+> To move an application over, see
+> [Coming from spring-ai-typesafe](https://spring-ai-community.github.io/spring-ai-decision-extensions/latest-snapshot/migration/).
 
 ## What is in it
 
@@ -99,9 +101,13 @@ model, so every reply is screened before it is judged, retried or stored.
 
 ## Documentation
 
-The full documentation is in [`docs/`](docs/index.md): the concepts, a page per component,
-testing support and a guide for moving from `spring-ai-typesafe`. It is a
-[MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site:
+The full documentation is published at
+[spring-ai-community.github.io/spring-ai-decision-extensions](https://spring-ai-community.github.io/spring-ai-decision-extensions/):
+the concepts, a page per component, testing support and a
+[guide for moving from `spring-ai-typesafe`](https://spring-ai-community.github.io/spring-ai-decision-extensions/latest-snapshot/migration/).
+
+Its sources are in [`docs/`](docs/index.md). It is a
+[MkDocs Material](https://squidfunk.github.io/mkdocs-material/) site, to preview locally:
 
 ```bash
 pip install mkdocs-material
