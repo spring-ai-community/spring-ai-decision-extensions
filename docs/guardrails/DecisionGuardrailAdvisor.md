@@ -18,6 +18,8 @@ crosses a line.
 - A blocked input never reaches the model at all
 - A severity rubric that can promote a borderline case to a refusal
 - A hazard the model refuses to answer is never read as safe
+- A refusal is marked as a Spring AI `GuardrailRefusal`, so `entity(...)` throws rather than parsing it
+- Streaming, with the reply held back until it is screened
 
 ## Why both directions
 
@@ -127,20 +129,24 @@ borderline problem**.
 
 ### A hazard keeps its own action
 
-However a hazard comes to refuse the turn, the turn gets that hazard's own action, and never
-less than a `BLOCK`:
+A hazard that fires or is flagged refuses the turn with its own action, and never less than
+a `BLOCK`. A hazard the model refuses to answer is a plain `BLOCK`, since a refusal is no
+evidence of that hazard in particular:
 
 | How the hazard refuses the turn | The turn is refused with |
 |---|---|
 | it fires, above `actionThreshold` | its action |
 | it is flagged, and the severity rubric promotes it | its action, at least `BLOCK` |
 | it is flagged, and the advisor refuses on review (`blockOnReview`) | its action, at least `BLOCK` |
-| the model refuses to answer it | its action, at least `BLOCK` |
+| the model refuses to answer it | `BLOCK` |
 
-In the `blockOnReview` case the verdict's outcome stays `REVIEW`, and that is what the
-response context reports; only the wording follows the flagged hazard.
-`DecisionGuardrail.refusalOutcome(verdict)` gives the outcome to refuse with, for a caller
-that applies the same rule itself.
+A flagged hazard keeps its action also next to a hazard that blocks: a block must not hide a
+call for support.
+
+In the `blockOnReview` case the verdict's outcome stays `REVIEW`, while the response context
+reports the outcome the turn was refused with. `DecisionGuardrail.refusalOutcome(verdict)`
+gives that outcome, for a caller that applies the same rule itself; for a verdict that
+passes it returns `PASS`.
 
 So a self-harm signal still routes to `SUPPORT`, with the support message, when it is only
 borderline but serious. And a hazard whose action is only `REVIEW` still blocks the turn
@@ -150,9 +156,10 @@ when the model would not answer it.
 
 A provider can [refuse](../concepts/decision-models.md#refusals) to answer a single
 question. A hazard the model refuses to answer is **not** taken as absent: a refusal to look
-at a text is no evidence that the text is safe. It counts as if it had fired, and is listed
-in `Verdict.refused()` and in the summary as `hazard (refused)`. The same holds for the
-severity rubric: a borderline hazard whose seriousness the model would not rate is refused.
+at a text is no evidence that the text is safe. It blocks the turn, and is listed in
+`Verdict.refused()` and in the summary as `hazard (refused)`; a flagged hazard appears there
+as `hazard (flagged)`. The same holds for the severity rubric: a borderline hazard whose
+seriousness the model would not rate is refused.
 
 ## Class diagram
 
@@ -165,10 +172,12 @@ classDiagram
         +String DEFAULT_SUPPORT_MESSAGE$
         +int DEFAULT_ORDER$
         +int BEFORE_MEMORY_ORDER$
+        +String OUTCOME_CONTEXT_KEY$
         +input(DecisionModel)$ DecisionGuardrailAdvisor
         +output(DecisionModel)$ DecisionGuardrailAdvisor
         +builder(DecisionModel)$ Builder
         +adviseCall(request, chain) ChatClientResponse
+        +adviseStream(request, chain) Flux
     }
 
     class DecisionGuardrail {
@@ -259,6 +268,7 @@ DecisionGuardrailAdvisor advisor = DecisionGuardrailAdvisor.builder(decisionMode
 | `supportMessage(String)` | a signposting message | Returned on a `SUPPORT`. |
 | `blockOnReview(boolean)` | `false` | Refuse a flagged turn, with the wording of [what was flagged](#a-hazard-keeps-its-own-action). |
 | `order(int)` | `DEFAULT_ORDER` (`LOWEST_PRECEDENCE - 1000`) | Where in the chain this runs. See [where it sits](#where-it-sits). |
+| `scheduler(Scheduler)` | `BaseAdvisor.DEFAULT_SCHEDULER` | Runs the screening calls when streaming, since they block. |
 
 At least one battery must be set.
 
@@ -295,16 +305,16 @@ the reply at the inner one.
 
 - screens **every reply** the model produces: each retry attempt before it is judged, and
   any text alongside a tool call. A reply that is only a tool call has no text and is
-  skipped;
+  skipped, and tool results are not screened; see [what is not screened](#what-is-not-screened);
 - what chat memory stores is **the refusal**, not the reply it replaced.
 
-A reply can hold **several generations**: thinking blocks (Anthropic, Gemini), a Gemini
-answer split into parts, or several choices when the model is asked for more than one. The
-output battery screens each choice (its parts joined) and each thinking block on its own,
-one call each, and refuses the reply when any of them is blocked. The thinking is screened
-because `ChatClient.content()` returns the first generation, which is the thinking when it
-is displayed. The price: a safe answer can be refused because its reasoning dwelt on a
-hazard.
+A reply can hold **several texts**: the answer and the reasoning (thinking) of a choice, a
+Gemini answer split into parts, or several choices when the model is asked for more than
+one. The output battery screens the answer and the reasoning of each choice on their own,
+one call each, and refuses the reply when any of them is blocked. Screening them apart keeps
+a long harmless text from diluting a short harmful one. The reasoning is screened because
+the caller can read it: it is part of the message, and of the stream. The price: a safe
+answer can be refused because its reasoning dwelt on a hazard.
 
 The same holds with Spring AI's session advisors (`SessionAdvisors`), which replace
 `MessageChatMemoryAdvisor` from 2.1 on: `BEFORE_MEMORY_ORDER` is ahead of the session turn
@@ -314,14 +324,75 @@ session memory advisor (`HIGHEST_PRECEDENCE + 1000`).
 !!! warning "A single advisor screens the input in the inner position"
     `DecisionGuardrailAdvisor.builder(model).build()` screens both directions at
     `DEFAULT_ORDER`. With chat memory or a message-rewriting advisor in the chain, its input
-    battery then sees the rewritten message rather than the person's, runs again on every
-    model call, and a blocked message is already in memory by the time it is refused. Use
-    the two factories there.
+    battery then sees the rewritten message rather than the person's, and a blocked message
+    is already in memory by the time it is refused. Use the two factories there.
 
 Either way a refusal is final. The refused response carries
 `DecisionGuardrailAdvisor.OUTCOME_CONTEXT_KEY` in its context, holding the outcome's name,
 and the self-refine advisor's default `skipEvaluationPredicate` neither judges nor retries
 it.
+
+### What is not screened
+
+The advisor screens text that a person wrote and text that the model answered. It does not
+screen what tools exchange with the model:
+
+- the arguments of a tool call that the model asks for;
+- the result of a tool, which the model reads on the next round of the tool calling loop. A
+  round of the loop does not screen the user message again either, since it was screened
+  when the turn started;
+- a tool result that is returned directly as the reply (`returnDirect`), because the tool
+  calling loop builds that reply outside the advisor.
+
+Treat the result of a tool that reads external content, such as a web page, a document or
+an email, as untrusted input, and guard it in the tool.
+
+## What a refusal looks like
+
+A refusal is an ordinary reply: one generation whose text is the refusal or the support
+message. Two markers tell it from an answer of the model:
+
+- the context of the response holds `DecisionGuardrailAdvisor.OUTCOME_CONTEXT_KEY`, with the
+  outcome the turn was refused with, `BLOCK` or `SUPPORT`;
+- the generation is a Spring AI `GuardrailRefusal`: its finish reason is
+  `GuardrailRefusal.FINISH_REASON`, in the `FILTERED` finish reason category, and
+  `GuardrailRefusal.isRefusal(chatResponse)` is `true`.
+
+A refusal that replaces a reply keeps the id, the model, the token usage and the rate limit
+of that reply, because the reply was generated and paid for. It keeps no other metadata,
+because a chat model can store the reply itself there, for example as the raw response of
+the provider. A refused input has no reply, so its response has no usage.
+
+### Structured output
+
+A refusal is plain text, not JSON, and it is not what the model said. As a
+`GuardrailRefusal` it is not taken for structured output:
+
+- `ChatClient.entity(...)` throws a `GuardrailRefusalException`, which carries the refusal
+  and the response with its context;
+- `responseEntity(...)` returns the response with a `null` entity;
+- a `StructuredOutputValidationAdvisor` returns the refusal without validating it or asking
+  the model again.
+
+```java
+try {
+    Order order = chatClient.prompt().user(message).call().entity(Order.class);
+}
+catch (GuardrailRefusalException ex) {
+    String refusal = ex.getRefusal();
+    Object outcome = ex.getChatClientResponse().context().get(DecisionGuardrailAdvisor.OUTCOME_CONTEXT_KEY);
+}
+```
+
+A `GuardrailRefusalException` is a `ContentFilteredException`, so one `catch` covers the
+refusal of the guardrail and the safety stop of a provider.
+
+By default the output advisor sits nearer the chat model than a
+`StructuredOutputValidationAdvisor` (`LOWEST_PRECEDENCE - 2000`). It then screens each reply
+that the validation advisor asks the model for, and a refusal ends the retries. To screen
+only the reply that the validation advisor returns, give the output advisor a lower order
+than the validation advisor with
+`DecisionGuardrailAdvisor.builder(decisionModel).inputBattery(null).order(...)`.
 
 ## Custom batteries
 
@@ -379,18 +450,25 @@ the severity rubric.
 ## Cost
 
 Each screened text is one call carrying the whole battery, so asking about six hazards costs
-what asking about one would. That is one call for the user message, and one for the reply
-unless it holds several generations, which are screened one call each. A blocked input costs one screening call and **no generation at
-all**: the chain is never invoked.
+what asking about one would. That is one call for the user message, once per turn however
+many tool rounds follow, and one for each text of the reply: the answer and the reasoning of
+each choice. A blocked input costs one screening call and **no generation at all**: the
+chain is never invoked.
 
 The guardrail runs on every turn, which makes it a good place for a small, fast model. Give
 it its own `DecisionModel`, or name a model in its `options(...)`.
 
 ## Streaming
 
-`adviseStream` is unsupported, for the same reason as the self-refine advisor: an output
-battery needs the whole reply before it can judge it, by which point it has already been
-emitted.
+The advisor screens the input before the stream starts. An output battery needs the whole
+reply before it can judge it, so with one configured the advisor holds the stream back until
+the reply is complete and screened. It then releases the chunks as it received them, or
+emits the refusal in their place. As for a call, the answer and the reasoning of each choice
+are screened on their own. An advisor that screens only the input does not delay the
+stream.
+
+The call to the decision model blocks, so when streaming it runs on a scheduler,
+`BaseAdvisor.DEFAULT_SCHEDULER` unless `scheduler(...)` sets another.
 
 ## See Also
 

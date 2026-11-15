@@ -19,13 +19,16 @@ package org.springaicommunity.decision.guardrail;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springaicommunity.decision.common.AssistantAnswers;
-import org.springaicommunity.decision.common.DecisionContextKeys;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Scheduler;
+
+import org.springaicommunity.decision.common.DecisionContextKeys;
 
 import org.springframework.ai.chat.client.ChatClientRequest;
 import org.springframework.ai.chat.client.ChatClientResponse;
@@ -34,31 +37,33 @@ import org.springframework.ai.chat.client.advisor.api.CallAdvisor;
 import org.springframework.ai.chat.client.advisor.api.CallAdvisorChain;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisor;
 import org.springframework.ai.chat.client.advisor.api.StreamAdvisorChain;
-import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.metadata.ChatResponseMetadata;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
+import org.springframework.ai.chat.model.GuardrailRefusal;
 import org.springframework.ai.decision.DecisionModel;
 import org.springframework.ai.decision.DecisionOptions;
 import org.springframework.core.Ordered;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
- * Screens what the user sends and what the model answers, refusing the turn when either
- * crosses a line.
+ * Screens what the user sends and what the model answers with a {@link DecisionModel},
+ * refusing the turn when either crosses a line.
  *
  * <p>
  * Both directions are checked because they fail differently. An input battery catches the
  * request that should never have been made; an output battery catches the reply that
  * should never have been given, which is the only one of the two that notices a jailbreak
- * that actually worked. Each battery is a single call carrying all its hazards.
+ * that actually worked. A battery screens a text in a single call carrying all its
+ * hazards.
  *
  * <p>
- * A blocked input never reaches the model at all — the refusal is returned in place of
- * the call, so nothing is spent and nothing is generated. A blocked output replaces the
- * generated text after the fact.
+ * A blocked input never reaches the model at all: the refusal is returned in place of the
+ * call, so nothing is spent and nothing is generated. A blocked output replaces the
+ * generated text.
  *
- * <p>
  * <h3>Where it sits, and why the two directions belong in different places</h3>
  *
  * The request is best screened at the outer edge of the chain and the reply at the inner
@@ -66,72 +71,90 @@ import org.springframework.util.Assert;
  *
  * <pre>{@code
  * ChatClient.builder(chatModel)
- *     .defaultAdvisors(
- *             DecisionGuardrailAdvisor.input(decisionModel),
- *             MessageChatMemoryAdvisor.builder(chatMemory).build(),
+ *     .defaultAdvisors(DecisionGuardrailAdvisor.input(decisionModel),
  *             DecisionGuardrailAdvisor.output(decisionModel))
+ *     .defaultAdvisors(SessionAdvisors.builder(sessionService).build())
  *     .build();
  * }</pre>
  *
- * {@link #input(DecisionModel)} runs at {@link #BEFORE_MEMORY_ORDER}, ahead of chat
- * memory, retrieval and the self-refine advisor. There it screens what the person
+ * {@link #input(DecisionModel)} runs at {@link #BEFORE_MEMORY_ORDER}, ahead of the
+ * session and chat memory advisors and of retrieval. There it screens what the person
  * actually wrote, once per turn, before a retrieval advisor inlines documents into the
- * message or the self-refine advisor appends its feedback; and a blocked message is never
- * stored, so it cannot come back as history on the next turn.
- * {@link #output(DecisionModel)} runs at {@link #DEFAULT_ORDER}, nearer the model than
- * chat memory, the tool loop and the self-refine advisor. There it screens every reply
- * the model gives, each retry attempt before it is judged, and what chat memory stores is
- * the refusal rather than the reply it replaced.
+ * message; and a blocked message is never stored, so it cannot come back as history on
+ * the next turn. {@link #output(DecisionModel)} runs at {@link #DEFAULT_ORDER}, nearer
+ * the model than memory and the tool-calling loop. There it screens every reply the model
+ * gives, and what memory stores is the refusal rather than the reply it replaced.
+ *
+ * <p>
+ * Only text that a person wrote or that the model answered is screened. The arguments of
+ * a tool call and the result of a tool are not, and neither is a tool result that is
+ * returned directly as the reply, since the tool-calling loop builds that reply outside
+ * this advisor.
  *
  * <p>
  * A single advisor from {@link #builder(DecisionModel)} screens both directions at
- * {@link #DEFAULT_ORDER}. That is simpler, and enough for a chain with no chat memory and
- * no advisor that rewrites the user message. With them, its input battery sees the
- * rewritten message rather than the person's, runs again on every model call, and a
- * blocked message is already in memory by the time it is refused.
+ * {@link #DEFAULT_ORDER}. That is simpler, and enough for a chain with no memory and no
+ * advisor that rewrites the user message. With them, its input battery sees the rewritten
+ * message rather than the person's, and a blocked message is already in memory by the
+ * time it is refused.
  *
+ * <h3>Streaming</h3>
+ *
+ * The input is screened before the stream starts. An output battery needs the whole reply
+ * before it can judge it, so with one configured the stream is held back until the reply
+ * is complete and screened, and is then released as it was received, or replaced by the
+ * refusal. An advisor that screens only the input streams through untouched.
+ *
+ * <h3>What a refusal looks like</h3>
+ *
+ * A refusal is an ordinary reply: one generation whose text is the refusal or the support
+ * message. Two markers tell it from an answer of the model: the generation is a
+ * {@link GuardrailRefusal}, and the response context holds the outcome under
+ * {@link #OUTCOME_CONTEXT_KEY}. A refused reply keeps the id, the model, the token usage
+ * and the rate limit of the reply it replaces, since that reply was generated and paid
+ * for. It keeps no other metadata, because a chat model can store the reply itself there.
  * <p>
- * This is a different job from {@code DecisionSelfRefineAdvisor}, which judges quality
- * and retries to improve it. Retrying does not help here: an unsafe answer is not a
- * draft. The two compose: the self-refine advisor does not judge or retry a turn this
- * advisor refused.
- *
- * Streaming is unsupported, for the same reason as the self-refine advisor: an output
- * battery needs the whole reply before it can judge it, by which point it has already
- * been emitted.
+ * As a {@link GuardrailRefusal}, a refusal is not taken for structured output:
+ * {@code ChatClient.entity(...)} throws a {@code GuardrailRefusalException} that carries
+ * the refusal and the context, and a {@code StructuredOutputValidationAdvisor} returns it
+ * without validating it or asking the model again.
  *
  * @author Christian Tzolov
+ * @see DecisionGuardrail
  */
-public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
+public final class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 
 	/**
-	 * The default order: nearer the model than chat memory, the tool loop and the
-	 * self-refine advisor, so every reply is screened before anything else sees it.
+	 * The default order: nearer the model than memory and the tool-calling loop, so every
+	 * reply is screened before anything else sees it.
 	 */
 	public static final int DEFAULT_ORDER = BaseAdvisor.LOWEST_PRECEDENCE - 1000;
 
 	/**
-	 * An order ahead of chat memory ({@code HIGHEST_PRECEDENCE + 200}) and everything
-	 * after it, where the user message is still what the person wrote and a blocked one
-	 * is never remembered. The place for screening the input.
+	 * An order ahead of the session and chat memory advisors
+	 * ({@code HIGHEST_PRECEDENCE + 200}) and everything after them, where the user
+	 * message is still what the person wrote and a blocked one is never remembered. The
+	 * place for screening the input.
 	 */
 	public static final int BEFORE_MEMORY_ORDER = Ordered.HIGHEST_PRECEDENCE + 100;
 
 	/** What a blocked turn says when the caller has not supplied wording. */
 	public static final String DEFAULT_REFUSAL = "I can't help with that.";
 
-	/**
-	 * The response-context key a refused turn carries, holding the name of the
-	 * {@link DecisionGuardrail.Outcome} that refused it. It marks the response as the
-	 * guardrail's own words rather than the model's answer, so an advisor further out,
-	 * such as {@code DecisionSelfRefineAdvisor}, does not judge a refusal or retry it.
-	 */
-	public static final String OUTCOME_CONTEXT_KEY = DecisionContextKeys.GUARDRAIL_OUTCOME;
-
 	/** What a turn routed to support says when the caller has not supplied wording. */
 	public static final String DEFAULT_SUPPORT_MESSAGE = "It sounds like you may be going through something "
 			+ "difficult. I can't help with this here, but people who can are available — please consider "
 			+ "reaching out to a local support line.";
+
+	/**
+	 * The response-context key a refused turn carries, holding the name of the
+	 * {@link DecisionGuardrail.Outcome} the turn was refused with:
+	 * {@link DecisionGuardrail.Outcome#BLOCK BLOCK} or
+	 * {@link DecisionGuardrail.Outcome#SUPPORT SUPPORT}. It marks the response as the
+	 * guardrail's own words rather than the model's answer, so an advisor further out
+	 * that evaluates or retries a response can leave a refusal alone.
+	 */
+	public static final String OUTCOME_CONTEXT_KEY = DecisionContextKeys.GUARDRAIL_OUTCOME;
 
 	private static final Logger logger = LoggerFactory.getLogger(DecisionGuardrailAdvisor.class);
 
@@ -149,19 +172,24 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 
 	private final boolean blockOnReview;
 
-	private final int advisorOrder;
+	private final int order;
 
-	private DecisionGuardrailAdvisor(DecisionModel decisionModel, @Nullable DecisionOptions options,
-			@Nullable DecisionGuardrail inputBattery, @Nullable DecisionGuardrail outputBattery, String refusal,
-			String supportMessage, boolean blockOnReview, int advisorOrder) {
-		this.decisionModel = decisionModel;
-		this.options = options;
-		this.inputBattery = inputBattery;
-		this.outputBattery = outputBattery;
-		this.refusal = refusal;
-		this.supportMessage = supportMessage;
-		this.blockOnReview = blockOnReview;
-		this.advisorOrder = advisorOrder;
+	private final Scheduler scheduler;
+
+	private DecisionGuardrailAdvisor(Builder builder) {
+		this.decisionModel = builder.decisionModel;
+		this.options = builder.options;
+		this.inputBattery = builder.screensInput
+				? (builder.inputBattery != null ? builder.inputBattery : DecisionGuardrail.defaultInputBattery())
+				: null;
+		this.outputBattery = builder.screensOutput
+				? (builder.outputBattery != null ? builder.outputBattery : DecisionGuardrail.defaultOutputBattery())
+				: null;
+		this.refusal = builder.refusal;
+		this.supportMessage = builder.supportMessage;
+		this.blockOnReview = builder.blockOnReview;
+		this.order = builder.order;
+		this.scheduler = builder.scheduler;
 	}
 
 	@Override
@@ -171,7 +199,7 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 
 	@Override
 	public int getOrder() {
-		return this.advisorOrder;
+		return this.order;
 	}
 
 	@Override
@@ -179,68 +207,172 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 		Assert.notNull(chatClientRequest, "chatClientRequest must not be null");
 		Assert.notNull(callAdvisorChain, "callAdvisorChain must not be null");
 
-		if (this.inputBattery != null) {
-			UserMessage userMessage = chatClientRequest.prompt().getUserMessage();
-			String text = userMessage == null ? "" : userMessage.getText();
-			if (text != null && !text.isBlank()) {
-				DecisionGuardrail.Verdict verdict = this.inputBattery.screen(this.decisionModel, text, this.options);
-				if (shouldBlock(verdict)) {
-					logger.warn("The decision guardrail blocked the request: {}", verdict.summary());
-					// Refused before the chain runs, so the model is never called.
-					return refuse(chatClientRequest, this.inputBattery, verdict);
-				}
-				logInconclusive(verdict);
-			}
+		// Refused before the chain runs, so the model is never called.
+		ChatClientResponse refusedInput = screenInput(chatClientRequest);
+		if (refusedInput != null) {
+			return refusedInput;
 		}
 
 		ChatClientResponse response = callAdvisorChain.nextCall(chatClientRequest);
 
-		if (this.outputBattery != null) {
-			for (String text : AssistantAnswers.visibleTextsOf(response)) {
-				DecisionGuardrail.Verdict verdict = this.outputBattery.screen(this.decisionModel, text, this.options);
-				if (shouldBlock(verdict)) {
-					logger.warn("The decision guardrail blocked the response: {}", verdict.summary());
-					return refuse(chatClientRequest, this.outputBattery, verdict);
-				}
-				logInconclusive(verdict);
-			}
-		}
-
-		return response;
+		ChatClientResponse refusedOutput = screenOutput(List.of(response));
+		return (refusedOutput != null) ? refusedOutput : response;
 	}
 
 	@Override
 	public Flux<ChatClientResponse> adviseStream(ChatClientRequest chatClientRequest,
 			StreamAdvisorChain streamAdvisorChain) {
-		return Flux
-			.error(new UnsupportedOperationException("The Decision Guardrail Advisor does not support streaming."));
+		Assert.notNull(chatClientRequest, "chatClientRequest must not be null");
+		Assert.notNull(streamAdvisorChain, "streamAdvisorChain must not be null");
+
+		if (this.inputBattery == null) {
+			return screenedStream(chatClientRequest, streamAdvisorChain);
+		}
+		// The screening call blocks, so it runs on the scheduler rather than on the
+		// subscriber's thread.
+		return Mono.fromCallable(() -> Optional.ofNullable(screenInput(chatClientRequest)))
+			.subscribeOn(this.scheduler)
+			.flatMapMany(refused -> refused.isPresent() ? Flux.just(refused.get())
+					: screenedStream(chatClientRequest, streamAdvisorChain));
+	}
+
+	/**
+	 * The stream of the rest of the chain. Without an output battery it passes through.
+	 * With one it is held back until the reply is complete and screened: chunks already
+	 * emitted could not be taken back.
+	 */
+	private Flux<ChatClientResponse> screenedStream(ChatClientRequest request, StreamAdvisorChain chain) {
+		Flux<ChatClientResponse> stream = chain.nextStream(request);
+		if (this.outputBattery == null) {
+			return stream;
+		}
+		return stream.collectList()
+			.flatMapMany(chunks -> Mono.fromCallable(() -> Optional.ofNullable(screenOutput(chunks)))
+				.subscribeOn(this.scheduler)
+				.flatMapMany(refused -> refused.isPresent() ? Flux.just(refused.get()) : Flux.fromIterable(chunks)));
+	}
+
+	/**
+	 * Screens the user message.
+	 * @return the refusal to return in place of the call, or {@code null} to proceed
+	 */
+	private @Nullable ChatClientResponse screenInput(ChatClientRequest request) {
+		if (this.inputBattery == null) {
+			return null;
+		}
+		// A request that ends in a tool result is a round of the tool loop. It carries
+		// the user message of the turn again, which was screened when the turn started.
+		if (!(request.prompt().getLastUserOrToolResponseMessage() instanceof UserMessage userMessage)) {
+			return null;
+		}
+		String text = userMessage.getText();
+		if (!StringUtils.hasText(text)) {
+			return null;
+		}
+		DecisionGuardrail.Verdict verdict = this.inputBattery.screen(this.decisionModel, text, this.options);
+		if (shouldBlock(verdict)) {
+			logger.warn("The decision guardrail blocked the request ({} battery): {}", this.inputBattery.name(),
+					verdict.summary());
+			// Nothing was generated, so there is no reply whose metadata to keep.
+			return refuse(request.context(), null, this.inputBattery, verdict);
+		}
+		logReview(this.inputBattery, verdict);
+		return null;
+	}
+
+	/**
+	 * Screens every text of the reply that the caller can read.
+	 * @param reply the response of a call, or the responses of a stream in order
+	 * @return the refusal to return in place of the reply, or {@code null} to let it
+	 * through
+	 */
+	private @Nullable ChatClientResponse screenOutput(List<ChatClientResponse> reply) {
+		if (this.outputBattery == null) {
+			return null;
+		}
+		for (String text : ReplyTexts.of(reply)) {
+			DecisionGuardrail.Verdict verdict = this.outputBattery.screen(this.decisionModel, text, this.options);
+			if (shouldBlock(verdict)) {
+				logger.warn("The decision guardrail blocked the response ({} battery): {}", this.outputBattery.name(),
+						verdict.summary());
+				return refuse(contextOf(reply), lastChatResponse(reply), this.outputBattery, verdict);
+			}
+			logReview(this.outputBattery, verdict);
+		}
+		return null;
 	}
 
 	private boolean shouldBlock(DecisionGuardrail.Verdict verdict) {
 		return verdict.blocked() || (this.blockOnReview && verdict.outcome() == DecisionGuardrail.Outcome.REVIEW);
 	}
 
-	private void logInconclusive(DecisionGuardrail.Verdict verdict) {
+	private void logReview(DecisionGuardrail battery, DecisionGuardrail.Verdict verdict) {
 		if (verdict.outcome() == DecisionGuardrail.Outcome.REVIEW) {
-			logger.info("The decision guardrail flagged a turn for review but let it through: {}", verdict.summary());
+			logger.info("The decision guardrail flagged a turn for review but let it through ({} battery): {}",
+					battery.name(), verdict.summary());
 		}
 	}
 
-	private ChatClientResponse refuse(ChatClientRequest request, DecisionGuardrail battery,
-			DecisionGuardrail.Verdict verdict) {
-		// A review refused by blockOnReview still gets the wording of what was flagged.
-		String text = battery.refusalOutcome(verdict) == DecisionGuardrail.Outcome.SUPPORT ? this.supportMessage
-				: this.refusal;
-		ChatResponse chatResponse = new ChatResponse(List.of(new Generation(new AssistantMessage(text))));
-		Map<String, Object> context = new HashMap<>(request.context());
-		context.put(OUTCOME_CONTEXT_KEY, verdict.outcome().name());
-		return ChatClientResponse.builder().chatResponse(chatResponse).context(context).build();
+	/**
+	 * The response that takes the place of a refused turn.
+	 * @param context the context to carry on: the request's for a refused input, the
+	 * reply's for a refused output
+	 * @param replaced the reply the refusal replaces, or {@code null} when nothing was
+	 * generated
+	 */
+	private ChatClientResponse refuse(Map<String, @Nullable Object> context, @Nullable ChatResponse replaced,
+			DecisionGuardrail battery, DecisionGuardrail.Verdict verdict) {
+		// Refused on review, the flagged hazards count too, so that a borderline
+		// self-harm signal still gets the support message.
+		DecisionGuardrail.Outcome refusedWith = this.blockOnReview ? battery.refusalOutcome(verdict)
+				: verdict.outcome();
+		String text = (refusedWith == DecisionGuardrail.Outcome.SUPPORT) ? this.supportMessage : this.refusal;
+		List<Generation> generations = List.of(GuardrailRefusal.generation(text));
+		ChatResponse chatResponse = (replaced != null) ? new ChatResponse(generations, accountingOf(replaced))
+				: new ChatResponse(generations);
+		Map<String, @Nullable Object> refusedContext = new HashMap<>(context);
+		refusedContext.put(OUTCOME_CONTEXT_KEY, refusedWith.name());
+		return ChatClientResponse.builder().chatResponse(chatResponse).context(refusedContext).build();
 	}
 
 	/**
+	 * What a refusal keeps of the reply it replaces: the id, the model, the token usage
+	 * and the rate limit. Nothing else, since a chat model can store the reply itself in
+	 * its metadata, as the raw response of the provider, citations or search results.
+	 */
+	private static ChatResponseMetadata accountingOf(ChatResponse replaced) {
+		ChatResponseMetadata metadata = replaced.getMetadata();
+		return ChatResponseMetadata.builder()
+			.id(metadata.getId())
+			.model(metadata.getModel())
+			.usage(metadata.getUsage())
+			.rateLimit(metadata.getRateLimit())
+			.build();
+	}
+
+	/** The context of a reply: every entry of its responses, later ones winning. */
+	private static Map<String, @Nullable Object> contextOf(List<ChatClientResponse> reply) {
+		Map<String, @Nullable Object> context = new HashMap<>();
+		reply.forEach(response -> context.putAll(response.context()));
+		return context;
+	}
+
+	/** The last response of a reply, which is where a stream reports the token usage. */
+	private static @Nullable ChatResponse lastChatResponse(List<ChatClientResponse> reply) {
+		for (int i = reply.size() - 1; i >= 0; i--) {
+			ChatResponse chatResponse = reply.get(i).chatResponse();
+			if (chatResponse != null) {
+				return chatResponse;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * A builder of an advisor that screens both directions with the default batteries, at
+	 * {@link #DEFAULT_ORDER}.
 	 * @param decisionModel the model the hazards are put to
-	 * @return a new builder, screening both directions with the default batteries at
-	 * {@link #DEFAULT_ORDER}
+	 * @return a new builder
 	 */
 	public static Builder builder(DecisionModel decisionModel) {
 		return new Builder(decisionModel);
@@ -278,9 +410,13 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 
 		private @Nullable DecisionOptions options;
 
-		private @Nullable DecisionGuardrail inputBattery = DecisionGuardrail.defaultInputBattery();
+		private @Nullable DecisionGuardrail inputBattery;
 
-		private @Nullable DecisionGuardrail outputBattery = DecisionGuardrail.defaultOutputBattery();
+		private boolean screensInput = true;
+
+		private @Nullable DecisionGuardrail outputBattery;
+
+		private boolean screensOutput = true;
 
 		private String refusal = DEFAULT_REFUSAL;
 
@@ -288,7 +424,9 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 
 		private boolean blockOnReview;
 
-		private int advisorOrder = DEFAULT_ORDER;
+		private int order = DEFAULT_ORDER;
+
+		private Scheduler scheduler = BaseAdvisor.DEFAULT_SCHEDULER;
 
 		private Builder(DecisionModel decisionModel) {
 			Assert.notNull(decisionModel, "decisionModel must not be null");
@@ -306,27 +444,30 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 
 		/**
-		 * @param inputBattery what to ask of the user message, or {@code null} to skip
-		 * screening the input
+		 * Sets what to ask of the user message.
+		 * @param inputBattery the battery, or {@code null} to skip screening the input
 		 * @return this builder
 		 */
 		public Builder inputBattery(@Nullable DecisionGuardrail inputBattery) {
 			this.inputBattery = inputBattery;
+			this.screensInput = (inputBattery != null);
 			return this;
 		}
 
 		/**
-		 * @param outputBattery what to ask of the reply, or {@code null} to skip
-		 * screening the output
+		 * Sets what to ask of the reply.
+		 * @param outputBattery the battery, or {@code null} to skip screening the output
 		 * @return this builder
 		 */
 		public Builder outputBattery(@Nullable DecisionGuardrail outputBattery) {
 			this.outputBattery = outputBattery;
+			this.screensOutput = (outputBattery != null);
 			return this;
 		}
 
 		/**
-		 * @param refusal what to say when a turn is blocked
+		 * Sets what to say when a turn is blocked.
+		 * @param refusal the wording
 		 * @return this builder
 		 */
 		public Builder refusal(String refusal) {
@@ -336,7 +477,8 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 
 		/**
-		 * @param supportMessage what to say when a turn is routed to support
+		 * Sets what to say when a turn is routed to support.
+		 * @param supportMessage the wording
 		 * @return this builder
 		 */
 		public Builder supportMessage(String supportMessage) {
@@ -346,7 +488,7 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 
 		/**
-		 * Refuses a flagged-for-review turn, with the support message when a flagged
+		 * Refuses a flagged-for-review turn too, with the support message when a flagged
 		 * hazard routes to support and the refusal otherwise. Off by default: review
 		 * exists so a borderline case reaches a human instead of being refused by a
 		 * threshold.
@@ -359,22 +501,41 @@ public class DecisionGuardrailAdvisor implements CallAdvisor, StreamAdvisor {
 		}
 
 		/**
-		 * @param advisorOrder where in the chain this runs; {@link #DEFAULT_ORDER} unless
-		 * set, and {@link #BEFORE_MEMORY_ORDER} is the place for an input-only advisor
+		 * Sets where in the chain the advisor runs; {@link #DEFAULT_ORDER} unless set.
+		 * {@link #BEFORE_MEMORY_ORDER} is the place for an advisor that screens only the
+		 * input.
+		 * @param order the order, between {@code HIGHEST_PRECEDENCE} and
+		 * {@code LOWEST_PRECEDENCE}
 		 * @return this builder
 		 */
-		public Builder order(int advisorOrder) {
-			Assert.isTrue(advisorOrder > BaseAdvisor.HIGHEST_PRECEDENCE && advisorOrder < BaseAdvisor.LOWEST_PRECEDENCE,
-					"advisorOrder must be between HIGHEST_PRECEDENCE and LOWEST_PRECEDENCE");
-			this.advisorOrder = advisorOrder;
+		public Builder order(int order) {
+			Assert.isTrue(order > BaseAdvisor.HIGHEST_PRECEDENCE && order < BaseAdvisor.LOWEST_PRECEDENCE,
+					"order must be between HIGHEST_PRECEDENCE and LOWEST_PRECEDENCE");
+			this.order = order;
 			return this;
 		}
 
+		/**
+		 * Sets the scheduler the screening calls run on when streaming; the decision
+		 * model is called synchronously. {@link BaseAdvisor#DEFAULT_SCHEDULER} unless
+		 * set.
+		 * @param scheduler the scheduler
+		 * @return this builder
+		 */
+		public Builder scheduler(Scheduler scheduler) {
+			Assert.notNull(scheduler, "scheduler must not be null");
+			this.scheduler = scheduler;
+			return this;
+		}
+
+		/**
+		 * Builds the advisor.
+		 * @return the advisor
+		 */
 		public DecisionGuardrailAdvisor build() {
-			Assert.isTrue(this.inputBattery != null || this.outputBattery != null,
+			Assert.isTrue(this.screensInput || this.screensOutput,
 					"a guardrail that screens neither direction does nothing");
-			return new DecisionGuardrailAdvisor(this.decisionModel, this.options, this.inputBattery, this.outputBattery,
-					this.refusal, this.supportMessage, this.blockOnReview, this.advisorOrder);
+			return new DecisionGuardrailAdvisor(this);
 		}
 
 	}

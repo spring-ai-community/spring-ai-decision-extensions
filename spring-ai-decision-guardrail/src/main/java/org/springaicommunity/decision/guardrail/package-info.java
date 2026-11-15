@@ -16,7 +16,7 @@
 
 /**
  * A battery of hazard checks put to a decision model, and the chat client advisor that
- * screens a turn with it.
+ * screens the user message and the reply with it.
  */
 @NullMarked
 package org.springaicommunity.decision.guardrail;

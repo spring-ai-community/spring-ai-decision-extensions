@@ -79,8 +79,8 @@ Most of the port is a rename. These are the places where behaviour changed, and 
   The [confidence gate](patterns/DecisionConfidenceGate.md) escalates such an answer, and
   the judge reads the probabilities rather than the confidence.
 - **A provider can refuse one question.** The judge reports a refused criterion as `ERROR`.
-  The guardrail treats a refused hazard as if it had fired. The chat adapter replies `null`
-  for it.
+  The guardrail blocks the turn on a refused hazard. The chat adapter replies `null` for
+  it.
 - **There is no common outage exception.** The self-refine advisor no longer recognises
   `TypeSafeException`. It takes a
   [`transientErrorPredicate`](self-refine/DecisionSelfRefineAdvisor.md#when-judging-fails),

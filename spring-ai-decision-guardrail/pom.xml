@@ -51,6 +51,17 @@
 			<artifactId>spring-ai-decision-test</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-session-advisor</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<!-- The decision model of the integration test. -->
+		<dependency>
+			<groupId>org.springframework.ai</groupId>
+			<artifactId>spring-ai-systemone</artifactId>
+			<scope>test</scope>
+		</dependency>
 		<!-- Only to test how the guardrail composes with the self-refine advisor. -->
 		<dependency>
 			<groupId>org.springaicommunity</groupId>

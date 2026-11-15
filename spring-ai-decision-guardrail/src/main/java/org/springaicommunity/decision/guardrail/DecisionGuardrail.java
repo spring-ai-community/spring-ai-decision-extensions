@@ -53,16 +53,24 @@ import org.springframework.util.Assert;
  * serious enough that a borderline probability is not good enough.
  *
  * <p>
- * A hazard the model refuses to answer is not taken as absent, since a refusal to look at
- * a text is no evidence that the text is safe. It is treated as if it had fired.
+ * A hazard that fires, or that is promoted from a review, refuses the turn with its own
+ * action, and never with less than a {@link Outcome#BLOCK}. A self-harm signal therefore
+ * still routes to {@link Outcome#SUPPORT} when it is only borderline but serious, also
+ * when another hazard blocks the same turn.
  *
  * <p>
- * Whichever way a hazard comes to refuse the turn (firing, being refused, or being
- * promoted from a review), the turn gets that hazard's own action and never less than a
- * {@link Outcome#BLOCK}. A self-harm signal therefore still routes to
- * {@link Outcome#SUPPORT} when it is only borderline but serious.
+ * A hazard the model refuses to answer is not taken as absent, since a refusal to look at
+ * a text is no evidence that the text is safe: the turn is blocked. It is a plain
+ * {@link Outcome#BLOCK} whatever the hazard's action, because a refusal is no evidence of
+ * that particular hazard either.
+ *
+ * <p>
+ * The default batteries and thresholds are a starting point. Probabilities are not
+ * comparable across decision models, so measure the thresholds on the model in use, and
+ * write the hazards your application actually has.
  *
  * @author Christian Tzolov
+ * @see DecisionGuardrailAdvisor
  */
 public final class DecisionGuardrail {
 
@@ -76,108 +84,25 @@ public final class DecisionGuardrail {
 
 	private final Map<String, Hazard> hazards;
 
-	private final ScoreQuestion severity;
-
 	private final double reviewThreshold;
 
 	private final double actionThreshold;
 
 	private final double severityBlockThreshold;
 
+	private final Map<String, DecisionQuestion> questions;
+
 	private DecisionGuardrail(String name, Map<String, Hazard> hazards, ScoreQuestion severity, double reviewThreshold,
 			double actionThreshold, double severityBlockThreshold) {
 		this.name = name;
 		this.hazards = hazards;
-		this.severity = severity;
 		this.reviewThreshold = reviewThreshold;
 		this.actionThreshold = actionThreshold;
 		this.severityBlockThreshold = severityBlockThreshold;
-	}
-
-	/**
-	 * What to do about a turn.
-	 *
-	 * <p>
-	 * Declared in increasing precedence: when several hazards fire, the most serious
-	 * outcome is the one that applies.
-	 */
-	public enum Outcome {
-
-		/** Nothing crossed a threshold. */
-		PASS,
-
-		/** Borderline. Worth a human looking, not worth refusing over. */
-		REVIEW,
-
-		/** Refuse the turn. */
-		BLOCK,
-
-		/**
-		 * Refuse, and route to help rather than to an error. Reserved for hazards where
-		 * the person needs something other than the assistant.
-		 */
-		SUPPORT
-
-	}
-
-	/**
-	 * One hazard: the question that detects it and what to do when it fires.
-	 *
-	 * @param question the detector
-	 * @param action what firing means
-	 */
-	public record Hazard(YesNoQuestion question, Outcome action) {
-
-		public Hazard {
-			Assert.notNull(question, "question must not be null");
-			Assert.notNull(action, "action must not be null");
-			Assert.isTrue(action != Outcome.PASS, "a hazard's action must do something");
-		}
-	}
-
-	/**
-	 * What a battery concluded.
-	 *
-	 * @param outcome the action to take
-	 * @param triggered the hazards that crossed the action threshold, worst first
-	 * @param flagged the hazards that crossed only the review threshold
-	 * @param refused the hazards the model refused to answer, which refuse the turn with
-	 * their own action
-	 * @param severity the severity rubric's value, or {@code -1} when no rubric was asked
-	 * or the model refused to answer it
-	 * @param scores the probability of every hazard that was answered, keyed by name
-	 */
-	public record Verdict(Outcome outcome, List<String> triggered, List<String> flagged, List<String> refused,
-			double severity, Map<String, Double> scores) {
-
-		public Verdict {
-			triggered = triggered == null ? List.of() : List.copyOf(triggered);
-			flagged = flagged == null ? List.of() : List.copyOf(flagged);
-			refused = refused == null ? List.of() : List.copyOf(refused);
-			scores = scores == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(scores));
-		}
-
-		/**
-		 * @return {@code true} when the turn must not proceed as it is
-		 */
-		public boolean blocked() {
-			return this.outcome == Outcome.BLOCK || this.outcome == Outcome.SUPPORT;
-		}
-
-		/**
-		 * @return a one-line summary naming what fired
-		 */
-		public String summary() {
-			if (this.outcome == Outcome.PASS) {
-				return "pass";
-			}
-			List<String> reasons = new ArrayList<>(this.triggered);
-			this.refused.forEach(hazard -> reasons.add(hazard + " (refused)"));
-			if (reasons.isEmpty()) {
-				reasons.addAll(this.flagged);
-			}
-			return this.outcome.name().toLowerCase(Locale.ROOT) + " " + reasons;
-		}
+		Map<String, DecisionQuestion> questions = new LinkedHashMap<>();
+		hazards.forEach((hazardName, hazard) -> questions.put(hazardName, hazard.question()));
+		questions.put(SEVERITY_QUESTION, severity);
+		this.questions = Collections.unmodifiableMap(questions);
 	}
 
 	/**
@@ -217,10 +142,7 @@ public final class DecisionGuardrail {
 	 * @return the questions, in declaration order
 	 */
 	public Map<String, DecisionQuestion> questions() {
-		Map<String, DecisionQuestion> questions = new LinkedHashMap<>();
-		this.hazards.forEach((hazardName, hazard) -> questions.put(hazardName, hazard.question()));
-		questions.put(SEVERITY_QUESTION, this.severity);
-		return questions;
+		return this.questions;
 	}
 
 	/**
@@ -240,9 +162,10 @@ public final class DecisionGuardrail {
 
 		for (Map.Entry<String, Hazard> entry : this.hazards.entrySet()) {
 			if (response.isRefused(entry.getKey())) {
-				// Fail closed: the hazard was not ruled out, so it counts as fired.
+				// Fail closed: the hazard was not ruled out. A plain block, since a
+				// refusal is no evidence of this hazard in particular.
 				refused.add(entry.getKey());
-				outcome = worst(outcome, worst(Outcome.BLOCK, entry.getValue().action()));
+				outcome = worst(outcome, Outcome.BLOCK);
 				continue;
 			}
 			double score = response.getYesNo(entry.getKey()).getProbability();
@@ -265,8 +188,12 @@ public final class DecisionGuardrail {
 			}
 			// A borderline probability about something serious is not a borderline
 			// problem, and neither is one whose seriousness the model would not rate.
-			if (outcome == Outcome.REVIEW && (severityRefused || severityValue >= this.severityBlockThreshold)) {
-				outcome = refusalFor(flagged);
+			// The flagged hazards then refuse the turn with their own action, also when
+			// another hazard already blocks it: a block must not hide a call for
+			// support.
+			boolean serious = severityRefused || severityValue >= this.severityBlockThreshold;
+			if (serious && (outcome == Outcome.REVIEW || !flagged.isEmpty())) {
+				outcome = worst(outcome, refusalFor(flagged));
 			}
 		}
 
@@ -274,17 +201,20 @@ public final class DecisionGuardrail {
 	}
 
 	/**
-	 * What a verdict becomes when its turn is refused. A verdict that already refuses
-	 * keeps its outcome. One that only flagged the turn for review takes the most serious
-	 * action among the flagged hazards, and at least {@link Outcome#BLOCK}; this is what
-	 * a caller that refuses on review should act on, so that a borderline self-harm
-	 * signal is still routed to support.
+	 * What a verdict becomes for a caller that refuses a turn on review too: the most
+	 * serious of the verdict's own outcome and the actions of the flagged hazards, and at
+	 * least {@link Outcome#BLOCK}. A borderline self-harm signal is then still routed to
+	 * support, whether it is the only finding or sits next to a hazard that blocks. A
+	 * verdict that passes stays {@link Outcome#PASS}, since there is nothing to refuse.
 	 * @param verdict a verdict of this battery
-	 * @return the outcome to refuse the turn with
+	 * @return the outcome to refuse the turn with, or {@link Outcome#PASS}
 	 */
 	public Outcome refusalOutcome(Verdict verdict) {
 		Assert.notNull(verdict, "verdict must not be null");
-		return verdict.blocked() ? verdict.outcome() : refusalFor(verdict.flagged());
+		if (verdict.outcome() == Outcome.PASS) {
+			return Outcome.PASS;
+		}
+		return worst(verdict.outcome(), refusalFor(verdict.flagged()));
 	}
 
 	private Outcome refusalFor(List<String> hazardNames) {
@@ -303,7 +233,8 @@ public final class DecisionGuardrail {
 	}
 
 	/**
-	 * @return the name of this battery, used in logs
+	 * The name of this battery, which the advisor logs with what it blocked or flagged.
+	 * @return the name
 	 */
 	public String name() {
 		return this.name;
@@ -362,6 +293,91 @@ public final class DecisionGuardrail {
 	 */
 	public static Builder builder(String name) {
 		return new Builder(name);
+	}
+
+	/**
+	 * What to do about a turn.
+	 *
+	 * <p>
+	 * Declared in increasing precedence: when several hazards fire, the most serious
+	 * outcome is the one that applies.
+	 */
+	public enum Outcome {
+
+		/** Nothing crossed a threshold. */
+		PASS,
+
+		/** Borderline. Worth a human looking, not worth refusing over. */
+		REVIEW,
+
+		/** Refuse the turn. */
+		BLOCK,
+
+		/**
+		 * Refuse, and route to help rather than to an error. Reserved for hazards where
+		 * the person needs something other than the assistant.
+		 */
+		SUPPORT
+
+	}
+
+	/**
+	 * One hazard: the question that detects it and what to do when it fires.
+	 *
+	 * @param question the detector
+	 * @param action what firing means
+	 */
+	public record Hazard(YesNoQuestion question, Outcome action) {
+
+		public Hazard {
+			Assert.notNull(question, "question must not be null");
+			Assert.notNull(action, "action must not be null");
+			Assert.isTrue(action != Outcome.PASS, "a hazard's action must do something");
+		}
+	}
+
+	/**
+	 * What a battery concluded.
+	 *
+	 * @param outcome the action to take
+	 * @param triggered the hazards that crossed the action threshold, in declaration
+	 * order
+	 * @param flagged the hazards that crossed only the review threshold
+	 * @param refused the hazards the model refused to answer, which block the turn
+	 * @param severity the severity rubric's value, or {@code -1} when no rubric was asked
+	 * or the model refused to answer it
+	 * @param scores the probability of every hazard that was answered, keyed by name
+	 */
+	public record Verdict(Outcome outcome, List<String> triggered, List<String> flagged, List<String> refused,
+			double severity, Map<String, Double> scores) {
+
+		public Verdict {
+			triggered = triggered == null ? List.of() : List.copyOf(triggered);
+			flagged = flagged == null ? List.of() : List.copyOf(flagged);
+			refused = refused == null ? List.of() : List.copyOf(refused);
+			scores = scores == null ? Map.of() : Collections.unmodifiableMap(new LinkedHashMap<>(scores));
+		}
+
+		/**
+		 * @return {@code true} when the turn must not proceed as it is
+		 */
+		public boolean blocked() {
+			return this.outcome == Outcome.BLOCK || this.outcome == Outcome.SUPPORT;
+		}
+
+		/**
+		 * @return a one-line summary naming every hazard behind the outcome: the ones
+		 * that fired, then the ones the model refused to answer, then the flagged ones
+		 */
+		public String summary() {
+			if (this.outcome == Outcome.PASS) {
+				return "pass";
+			}
+			List<String> reasons = new ArrayList<>(this.triggered);
+			this.refused.forEach(hazard -> reasons.add(hazard + " (refused)"));
+			this.flagged.forEach(hazard -> reasons.add(hazard + " (flagged)"));
+			return this.outcome.name().toLowerCase(Locale.ROOT) + " " + reasons;
+		}
 	}
 
 	/**
@@ -460,6 +476,7 @@ public final class DecisionGuardrail {
 		 * @return this builder
 		 */
 		public Builder severityBlockThreshold(double severityBlockThreshold) {
+			Assert.isTrue(severityBlockThreshold >= 0.0d, "severityBlockThreshold must not be negative");
 			this.severityBlockThreshold = severityBlockThreshold;
 			return this;
 		}
@@ -468,6 +485,10 @@ public final class DecisionGuardrail {
 			Assert.notEmpty(this.hazards, "a battery must declare at least one hazard");
 			Assert.isTrue(this.actionThreshold >= this.reviewThreshold,
 					"actionThreshold must be at least reviewThreshold, otherwise nothing is ever only flagged");
+			int topLevel = this.severity.getLevels().size() - 1;
+			Assert.isTrue(this.severityBlockThreshold <= topLevel,
+					() -> "severityBlockThreshold " + this.severityBlockThreshold + " is above the top level "
+							+ topLevel + " of the severity rubric, so no review would ever be promoted");
 			return new DecisionGuardrail(this.name, Collections.unmodifiableMap(new LinkedHashMap<>(this.hazards)),
 					this.severity, this.reviewThreshold, this.actionThreshold, this.severityBlockThreshold);
 		}
