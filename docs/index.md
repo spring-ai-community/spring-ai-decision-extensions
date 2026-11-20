@@ -1,7 +1,7 @@
 # Spring AI Decision Extensions
 
 Higher-level building blocks on top of the Spring AI
-[`DecisionModel`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision.html) API: a
+[`DecisionModel`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/models/decision.html) API: a
 model-as-a-judge made of atomic questions, self-refine and guardrail advisors for
 `ChatClient`, and a chat model adapter for typed classifications.
 
@@ -179,8 +179,8 @@ with the defect as feedback when it falls short.
 | Move from `spring-ai-typesafe` | [Coming from spring-ai-typesafe](migration.md) |
 
 Spring AI itself uses decision models for retrieval and tool selection, with
-[`DecisionDocumentReranker`, `DecisionDocumentFilter`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/retrieval-augmented-generation.html)
-and [`DecisionToolIndex`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/tools/tool-search-tool.html).
+[`DecisionDocumentReranker`, `DecisionDocumentFilter`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/rag/modules.html#_decisiondocumentreranker)
+and [`DecisionToolIndex`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/tools/tool-search.html).
 Those ship with the framework and are documented there.
 
 ## Requirements
@@ -199,7 +199,7 @@ The whole suite runs offline against a scripted `DecisionModel`; no key is neede
 
 ## Links
 
-- [Spring AI Decision Models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision.html)
+- [Spring AI Decision Models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/models/decision.html)
 - [Spring AI Documentation](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/)
 - [Source on GitHub](https://github.com/spring-ai-community/spring-ai-decision-extensions)
 

@@ -91,5 +91,5 @@ context only inside `user_question`, and only at its default order.
 ## See Also
 
 - [DecisionJudge](DecisionJudge.md)
-- [Spring AI evaluation testing](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/testing.html)
-- [`DecisionDocumentFilter`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/retrieval-augmented-generation.html), Spring AI's own way to screen the retrieved context before it is used
+- [Spring AI evaluation testing](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/evaluation/evaluators.html)
+- [`DecisionDocumentFilter`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/rag/modules.html#_decisiondocumentreranker), Spring AI's own way to screen the retrieved context before it is used

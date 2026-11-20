@@ -2,7 +2,7 @@
 
 Everything in this project is built on the Spring AI `DecisionModel` API. This page is a
 short tour of it; the
-[Spring AI reference](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision.html) is the
+[Spring AI reference](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/models/decision.html) is the
 full description.
 
 ## What a decision model is
@@ -371,4 +371,4 @@ The components here that call a model take the same options: `DecisionJudge.buil
 - [Providers](providers.md): the available implementations and what each supports
 - [Confidence](confidence.md): when to act on an answer automatically
 - [DecisionJudge](../judge/DecisionJudge.md): composing criteria into a pass/fail verdict
-- [Spring AI Decision Models reference](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision.html)
+- [Spring AI Decision Models reference](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/models/decision.html)

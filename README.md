@@ -1,7 +1,7 @@
 # Spring AI Decision Extensions
 
 Higher-level building blocks on top of the Spring AI
-[`DecisionModel`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision.html) API: a
+[`DecisionModel`](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/models/decision.html) API: a
 model-as-a-judge made of atomic questions, self-refine and guardrail advisors, and a chat
 model adapter for typed classifications.
 

@@ -6,9 +6,9 @@ a `DecisionModel` bean.
 
 | Provider | Starter | Default model | Runs |
 |----------|---------|---------------|------|
-| [Ollama](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/ollama-decision.html) | `spring-ai-starter-model-ollama` | `d1-omni:600m` | on your machine, no API key |
-| [OpenAI](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/openai-decision.html) | `spring-ai-starter-model-openai` | `gpt-6-luna` | hosted |
-| [System One](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/systemone-decision.html) | `spring-ai-starter-model-systemone` | `jev-latest` | hosted (TypeSafe) or local (Laya, llmman, Ollama) |
+| [Ollama](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/ollama/decision.html) | `spring-ai-starter-model-ollama` | `d1-omni:600m` | on your machine, no API key |
+| [OpenAI](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/openai/decision.html) | `spring-ai-starter-model-openai` | `gpt-6-luna` | hosted |
+| [System One](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/systemone.html) | `spring-ai-starter-model-systemone` | `jev-latest` | hosted (TypeSafe) or local (Laya, llmman, Ollama) |
 
 The Spring AI reference pages linked above are the full description of each. This page
 covers what matters when you use them with this project.
@@ -171,6 +171,6 @@ in the Spring AI reference.
 ## See Also
 
 - [Decision Models](decision-models.md): the API in brief
-- [Ollama decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/ollama-decision.html)
-- [OpenAI decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/openai-decision.html)
-- [System One decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/api/decision/systemone-decision.html)
+- [Ollama decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/ollama/decision.html)
+- [OpenAI decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/openai/decision.html)
+- [System One decision models](https://docs.spring.io/spring-ai/reference/2.1-SNAPSHOT/integrations/models/systemone.html)
