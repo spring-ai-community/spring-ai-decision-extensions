@@ -94,7 +94,7 @@ advisors; there is no need to declare it.
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-decision-bom</artifactId>
-            <version>0.5.0</version>
+            <version>0.5.1-SNAPSHOT</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>

@@ -126,7 +126,7 @@ Most of the port is a rename. These are the places where behaviour changed, and 
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-decision-bom</artifactId>
-            <version>0.5.0</version>
+            <version>0.5.1-SNAPSHOT</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
