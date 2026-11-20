@@ -28,12 +28,22 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_SECRET_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+      # The deploy below publishes whatever version the pom has, and a release
+      # version would go straight to Maven Central. Releases go through
+      # maven-central-release.yml instead, so a push that sets a release version
+      # deploys nothing here.
+      - name: Read the project version
+        id: version
+        run: echo "version=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)" >> "$GITHUB_OUTPUT"
+
       - name: Generate Java docs
+        if: endsWith(steps.version.outputs.version, '-SNAPSHOT')
         run: ./mvnw -Pjavadoc -B javadoc:aggregate
 
       # The cache is keyed on the poms only, so --update-snapshots keeps the
       # Spring AI snapshots it restores from going stale.
       - name: Build with Maven and deploy to the Central snapshot repository
+        if: endsWith(steps.version.outputs.version, '-SNAPSHOT')
         env:
           MAVEN_USERNAME: ${{ secrets.MAVEN_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}

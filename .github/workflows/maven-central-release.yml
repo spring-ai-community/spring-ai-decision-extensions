@@ -21,6 +21,16 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_SECRET_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
+      # Deploying a snapshot version here would publish a snapshot, not a release.
+      - name: Check that the version is a release
+        run: |
+          VERSION=$(./mvnw help:evaluate -Dexpression=project.version -q -DforceStdout)
+          if [[ "${VERSION}" == *-SNAPSHOT ]]; then
+            echo "::error::The version is ${VERSION}. Set the release version in the poms first."
+            exit 1
+          fi
+          echo "Releasing ${VERSION}"
+
       - name: Build and Test
         run: ./mvnw -B -U clean verify
 
