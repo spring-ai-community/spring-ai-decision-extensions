@@ -90,7 +90,9 @@ if (!report.failures().isEmpty()) {
 }
 ```
 
-Each `Failure` carries the sample's index and the exception the call failed with.
+Each `Failure` carries the sample's index and the exception the call failed with. A sample
+that your own executor rejects, for example a bounded pool that is full, is a `Failure` too,
+with the `RejectedExecutionException` as its cause.
 
 ## Cost and concurrency
 

@@ -17,6 +17,12 @@
 package org.springaicommunity.decision.patterns;
 
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.SynchronousQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.assertj.core.data.Offset;
@@ -249,6 +255,70 @@ class DecisionPatternsTests {
 		});
 		// The refusal carries no value, so one value is all there is to describe.
 		assertThat(report.statistics().get("urgent").values()).containsExactly(0.9d);
+	}
+
+	@Test
+	void reportsASampleTheExecutorRejectedWithoutLosingTheOthers() {
+		this.model.respondWith(Map.of("urgent", yesNo(0.9d))).respondWith(Map.of("urgent", yesNo(0.7d)));
+		RejectedExecutionException full = new RejectedExecutionException("queue full");
+		AtomicInteger submissions = new AtomicInteger();
+		// Runs the first and third sample in place, and turns the second one away.
+		Executor rejectingTheSecond = task -> {
+			if (submissions.getAndIncrement() == 1) {
+				throw full;
+			}
+			task.run();
+		};
+
+		DecisionConsistency.Report report = DecisionConsistency.sample(this.model, Map.of("ticket", "Payouts fail"),
+				Map.of("urgent", YesNoQuestion.of("Is it urgent?")), 3,
+				DecisionConsistency.Sampling.defaults().withExecutor(rejectingTheSecond));
+
+		assertThat(report.samples()).hasSize(2);
+		assertThat(report.failures()).singleElement().satisfies(failure -> {
+			assertThat(failure.index()).isEqualTo(1);
+			assertThat(failure.cause()).isSameAs(full);
+		});
+		assertThat(report.statistics().get("urgent").values()).containsExactly(0.9d, 0.7d);
+	}
+
+	@Test
+	void reportsEverySampleASaturatedExecutorTurnsAway() throws InterruptedException {
+		CountDownLatch occupied = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		// One worker, no queue: while the worker is busy, every submission is rejected.
+		ThreadPoolExecutor saturated = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
+				new SynchronousQueue<>(), new ThreadPoolExecutor.AbortPolicy());
+		saturated.execute(() -> {
+			occupied.countDown();
+			try {
+				release.await();
+			}
+			catch (InterruptedException ex) {
+				Thread.currentThread().interrupt();
+			}
+		});
+
+		try {
+			assertThat(occupied.await(5, TimeUnit.SECONDS)).isTrue();
+
+			DecisionConsistency.Report report = DecisionConsistency.sample(this.model,
+					Map.of("ticket", "Payouts fail"), Map.of("urgent", YesNoQuestion.of("Is it urgent?")), 3,
+					DecisionConsistency.Sampling.defaults().withExecutor(saturated));
+
+			assertThat(report.samples()).isEmpty();
+			assertThat(report.statistics()).isEmpty();
+			assertThat(report.failures()).extracting(DecisionConsistency.Failure::index).containsExactly(0, 1, 2);
+			assertThat(report.failures())
+				.allSatisfy(failure -> assertThat(failure.cause()).isInstanceOf(RejectedExecutionException.class));
+			assertThat(this.model.prompts()).isEmpty();
+			// The caller's executor is theirs to shut down.
+			assertThat(saturated.isShutdown()).isFalse();
+		}
+		finally {
+			release.countDown();
+			saturated.shutdownNow();
+		}
 	}
 
 	@Test

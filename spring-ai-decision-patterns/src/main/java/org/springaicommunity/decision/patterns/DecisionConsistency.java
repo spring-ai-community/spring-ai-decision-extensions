@@ -26,6 +26,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -84,7 +85,8 @@ public final class DecisionConsistency {
 	 * @param concurrency how many calls may be in flight at once
 	 * @param executor the executor to run on, or {@code null} to create and dispose a
 	 * pool per run. A supplied executor is never shut down, so it can be shared across
-	 * runs or be a virtual-thread executor
+	 * runs or be a virtual-thread executor. A sample it rejects is reported as a
+	 * {@link Failure}
 	 * @param options the options sent with every call to the model, such as the model
 	 * name; {@code null} for the model's defaults
 	 */
@@ -135,7 +137,8 @@ public final class DecisionConsistency {
 	 * A sample that did not come back.
 	 *
 	 * @param index the position of the sample in the run
-	 * @param cause what the model call failed with
+	 * @param cause what the model call failed with, or the
+	 * {@link RejectedExecutionException} of an executor that turned the sample away
 	 */
 	public record Failure(int index, RuntimeException cause) {
 
@@ -238,7 +241,8 @@ public final class DecisionConsistency {
 	 *
 	 * <p>
 	 * A sample that fails does not abort the run: it is reported among the
-	 * {@link Report#failures() failures} and the rest still run.
+	 * {@link Report#failures() failures} and the rest still run. The same holds for a
+	 * sample the {@link Sampling#executor() executor} rejects.
 	 * @param decisionModel the model to sample
 	 * @param fields the fields to ask about, each a value a
 	 * {@link org.springframework.ai.decision.input.FieldsInput} accepts; a {@code uid} is
@@ -286,7 +290,7 @@ public final class DecisionConsistency {
 
 	/**
 	 * @return one outcome per prompt, in order: the response, or the exception the call
-	 * failed with
+	 * failed with or was rejected with
 	 */
 	private static List<Object> callAll(DecisionModel decisionModel, List<DecisionPrompt> prompts, Sampling sampling) {
 		ExecutorService owned = (sampling.executor() == null)
@@ -298,7 +302,16 @@ public final class DecisionConsistency {
 		try {
 			List<CompletableFuture<Object>> futures = new ArrayList<>(prompts.size());
 			for (DecisionPrompt prompt : prompts) {
-				futures.add(CompletableFuture.supplyAsync(() -> callOne(decisionModel, prompt, permits), executor));
+				try {
+					futures.add(CompletableFuture.supplyAsync(() -> callOne(decisionModel, prompt, permits), executor));
+				}
+				catch (RejectedExecutionException ex) {
+					// A bounded executor of the caller's can reject a submission before
+					// callOne starts, where its own handling cannot see the failure. Keep
+					// the rejection as this sample's outcome, so the samples the executor
+					// did accept are still joined and reported.
+					futures.add(CompletableFuture.completedFuture(ex));
+				}
 			}
 			return futures.stream().map(CompletableFuture::join).toList();
 		}
