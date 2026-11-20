@@ -1689,7 +1689,9 @@ whatever came back:</p>
 </span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">             </span><span class="n">report</span><span class="p">.</span><span class="na">failures</span><span class="p">().</span><span class="na">size</span><span class="p">()</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">report</span><span class="p">.</span><span class="na">samples</span><span class="p">().</span><span class="na">size</span><span class="p">());</span>
 </span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="p">}</span>
 </span></code></pre></div>
-<p>Each <code>Failure</code> carries the sample's index and the exception the call failed with.</p>
+<p>Each <code>Failure</code> carries the sample's index and the exception the call failed with. A sample
+that your own executor rejects, for example a bounded pool that is full, is a <code>Failure</code> too,
+with the <code>RejectedExecutionException</code> as its cause.</p>
 <h2 id="cost-and-concurrency">Cost and concurrency<a class="headerlink" href="#cost-and-concurrency" title="Permanent link">&para;</a></h2>
 <p>Fifteen samples are fifteen model calls, four at a time by default. It is a development-time
 and CI-time tool: run it when choosing a threshold or when a rubric changes, not on every
