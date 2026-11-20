@@ -45,7 +45,7 @@ Import the BOM, then declare the artifacts without versions:
         <dependency>
             <groupId>org.springaicommunity</groupId>
             <artifactId>spring-ai-decision-bom</artifactId>
-            <version>0.5.0-SNAPSHOT</version>
+            <version>0.5.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
