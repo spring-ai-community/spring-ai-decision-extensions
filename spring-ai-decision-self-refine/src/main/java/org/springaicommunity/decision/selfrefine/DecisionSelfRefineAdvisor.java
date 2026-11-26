@@ -122,7 +122,7 @@ import org.springframework.util.StringUtils;
  *
  * <p>
  * When a failure is best fixed by calling the tools again, order the advisor at
- * {@link #BEFORE_TOOLS_ORDER}, between memory and the tool loop. A retry then re-runs the
+ * {@link #BEFORE_TOOLS_ORDER}, between chat memory and the tool loop. A retry then re-runs the
  * tools, and since the tool traffic no longer reaches this advisor's prompt it records it
  * instead: each tool callback on the request is wrapped for the attempt, and every call
  * and result goes into {@code tool_calls}. Only tools passed as callbacks —
@@ -130,6 +130,17 @@ import org.springframework.util.StringUtils;
  * resolved by name through a {@code ToolCallbackResolver}. The price of that position: it
  * is also outside every advisor at order {@code 0}, so retrieval re-runs on each attempt
  * and the judge does not see the retrieved context.
+ *
+ * <p>
+ * The session advisors of Spring AI 2.1 ({@code SessionAdvisors}) run the memory advisor
+ * inside the tool loop, at {@code HIGHEST_PRECEDENCE + 1000}. At the default order this
+ * advisor is inside it, and the session keeps only the final answer. At
+ * {@link #BEFORE_TOOLS_ORDER} it is outside, so every attempt runs the memory advisor
+ * again and the session keeps all of it: the rejected answer, its tool calls and results,
+ * and the retry's feedback prompt as a user message. They come back as history on later
+ * turns. Do not filter the feedback prompt out of the session: the tool loop rebuilds the
+ * prompt of each round from the session, so a retry that calls a tool would write its
+ * answer without the feedback.
  *
  * <h3>What a retry is told</h3>
  *
@@ -178,9 +189,9 @@ public class DecisionSelfRefineAdvisor implements CallAdvisor, StreamAdvisor {
 	public static final int MAX_REPEAT_ATTEMPTS_LIMIT = 100;
 
 	/**
-	 * The default order: inside chat memory, retrieval and the tool loop, so memory keeps
-	 * only the final answer, retrieval runs once per turn and the judge sees both the
-	 * retrieved context and the tool calls.
+	 * The default order: inside chat memory, session memory, retrieval and the tool loop,
+	 * so memory keeps only the final answer, retrieval runs once per turn and the judge
+	 * sees both the retrieved context and the tool calls.
 	 */
 	public static final int DEFAULT_ORDER = BaseAdvisor.LOWEST_PRECEDENCE - 2000;
 
@@ -188,7 +199,8 @@ public class DecisionSelfRefineAdvisor implements CallAdvisor, StreamAdvisor {
 	 * An order between chat memory ({@code HIGHEST_PRECEDENCE + 200}) and the tool loop
 	 * ({@code HIGHEST_PRECEDENCE + 300}), where a retry re-runs the tools and their calls
 	 * are recorded for the judge. It is also outside every advisor at order {@code 0},
-	 * retrieval included.
+	 * retrieval included, and outside the {@code SessionMemoryAdvisor}
+	 * ({@code HIGHEST_PRECEDENCE + 1000}), which then stores every attempt.
 	 */
 	public static final int BEFORE_TOOLS_ORDER = Ordered.HIGHEST_PRECEDENCE + 250;
 
