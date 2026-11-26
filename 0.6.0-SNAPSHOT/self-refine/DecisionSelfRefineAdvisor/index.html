@@ -1965,7 +1965,7 @@ application advisors run at order <code>0</code>.</p>
 <td>most chains, and anything with retrieval</td>
 </tr>
 <tr>
-<td><code>BEFORE_TOOLS_ORDER</code> (<code>HIGHEST_PRECEDENCE + 250</code>), between memory and the tool loop</td>
+<td><code>BEFORE_TOOLS_ORDER</code> (<code>HIGHEST_PRECEDENCE + 250</code>), between chat memory and the tool loop</td>
 <td>the tool calls, <strong>recorded</strong> during each attempt; <strong>not</strong> the retrieved context</td>
 <td>re-runs the tools, so a tool that returned something wrong can return something else</td>
 <td>tool-heavy chains without retrieval, where a bad tool result is the usual failure</td>
@@ -1979,9 +1979,16 @@ the answer finally returned.</p>
 <p>Spring AI 2.1 deprecates <code>MessageChatMemoryAdvisor</code> in favour of the session advisors
 (<code>SessionAdvisors</code>). Those run in two places: the turn advisor at
 <code>HIGHEST_PRECEDENCE + 200</code>, and the memory advisor <em>inside</em> the tool loop, at
-<code>HIGHEST_PRECEDENCE + 1000</code>. Both are outside this advisor's default order. At
-<code>BEFORE_TOOLS_ORDER</code>, however, the session memory advisor is inside the retry loop, so
-it sees every attempt and not only the final answer.</p>
+<code>HIGHEST_PRECEDENCE + 1000</code>. Both are outside this advisor's default order, so the
+session keeps only the final answer.</p>
+<p>At <code>BEFORE_TOOLS_ORDER</code>, however, the session memory advisor is inside the retry loop,
+and the session keeps every attempt: the rejected answer, its tool calls and results,
+and the retry's feedback prompt as a user message. All of it comes back as history on
+later turns. With session memory, prefer the default order unless a retry has to call
+the tools again.</p>
+<p>Do not filter the feedback prompt out of the session with a <code>MessageFilter</code>. The tool
+loop rebuilds the prompt of each round from the session, so a retry that calls a tool
+would write its answer without the feedback.</p>
 </div>
 <p>At <code>BEFORE_TOOLS_ORDER</code> the attempt's tool traffic never reaches this advisor's prompt, so
 it is recorded instead: for each attempt, the request's tool callbacks are wrapped, and
