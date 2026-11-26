@@ -30,9 +30,12 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.client.advisor.MessageChatMemoryAdvisor;
 import org.springframework.ai.chat.client.advisor.SafeGuardAdvisor;
 import org.springframework.ai.chat.client.advisor.ToolCallingAdvisor;
+import org.springframework.ai.chat.client.advisor.api.Advisor;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.MessageType;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.metadata.ChatGenerationMetadata;
@@ -46,6 +49,11 @@ import org.springframework.ai.decision.question.ScoreQuestion;
 import org.springframework.ai.decision.question.YesNoQuestion;
 import org.springframework.ai.model.tool.ToolCallLimitExceededException;
 import org.springframework.ai.model.tool.ToolCallingManager;
+import org.springframework.ai.session.DefaultSessionService;
+import org.springframework.ai.session.InMemorySessionRepository;
+import org.springframework.ai.session.MessageFilter;
+import org.springframework.ai.session.SessionService;
+import org.springframework.ai.session.advisor.SessionAdvisors;
 import org.springframework.ai.tool.annotation.Tool;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -663,6 +671,125 @@ class DecisionSelfRefineAdvisorTests {
 		this.model.verify();
 	}
 
+	@Test
+	void leavesRejectedAttemptsOutOfChatMemoryBeforeTheToolLoop() {
+		// BEFORE_TOOLS_ORDER is still inside a chat memory advisor, which runs outside the
+		// tool loop: each attempt runs the tools again, and memory sees the final answer.
+		expectEvaluation(FAILING);
+		expectEvaluation(PASSING);
+		ChatMemory memory = MessageWindowChatMemory.builder().build();
+		WeatherTool tool = new WeatherTool("-125 degrees Celsius", "15 degrees Celsius");
+
+		ChatClient.builder(twoAttemptsWithTools())
+			.defaultTools(tool)
+			.defaultAdvisors(MessageChatMemoryAdvisor.builder(memory).build(), beforeTools())
+			.build()
+			.prompt("What is the weather in Paris?")
+			.advisors(advisor -> advisor.param(ChatMemory.CONVERSATION_ID, "c1"))
+			.call()
+			.content();
+
+		assertThat(tool.calls()).isEqualTo(2);
+		assertThat(memory.get("c1")).extracting(Message::getText)
+			.containsExactly("What is the weather in Paris?", "It is 15 degrees Celsius in Paris.");
+		this.model.verify();
+	}
+
+	@Test
+	void leavesRejectedAttemptsOutOfTheSessionAtTheDefaultOrder() {
+		// The session memory advisor runs inside the tool loop, and this advisor inside it
+		// at its default order: the session sees one request and the answer finally
+		// returned.
+		expectEvaluation(FAILING);
+		expectEvaluation(PASSING);
+		SessionService sessionService = sessionService();
+		WeatherTool tool = new WeatherTool("-125 degrees Celsius");
+
+		ChatClient
+			.builder(new ScriptedChatModel(ScriptedChatModel.toolCall("weather", "{\"city\":\"Paris\"}"),
+					"It is -125 degrees Celsius in Paris.", "It is 15 degrees Celsius in Paris."))
+			.defaultTools(tool)
+			.defaultAdvisors(withSession(SessionAdvisors.builder(sessionService),
+					DecisionSelfRefineAdvisor.builder().judge(judge()).build()))
+			.build()
+			.prompt("What is the weather in Paris?")
+			.advisors(SessionAdvisors.session("s1"))
+			.call()
+			.content();
+
+		List<Message> stored = sessionService.getMessages("s1");
+		assertThat(tool.calls()).isEqualTo(1);
+		assertThat(stored).extracting(Message::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT);
+		assertThat(stored.get(3).getText()).isEqualTo("It is 15 degrees Celsius in Paris.");
+		this.model.verify();
+	}
+
+	@Test
+	void theSessionKeepsEveryAttemptBeforeTheToolLoop() {
+		// At BEFORE_TOOLS_ORDER the session memory advisor is inside the retry loop: it
+		// stores the rejected answer with its tool traffic, and the feedback prompt of the
+		// retry as a user message.
+		expectEvaluation(FAILING);
+		expectEvaluation(PASSING);
+		SessionService sessionService = sessionService();
+		ScriptedChatModel chatModel = twoAttemptsWithTools();
+		WeatherTool tool = new WeatherTool("-125 degrees Celsius", "15 degrees Celsius");
+
+		ChatClient.builder(chatModel)
+			.defaultTools(tool)
+			.defaultAdvisors(withSession(SessionAdvisors.builder(sessionService), beforeTools()))
+			.build()
+			.prompt("What is the weather in Paris?")
+			.advisors(SessionAdvisors.session("s1"))
+			.call()
+			.content();
+
+		List<Message> stored = sessionService.getMessages("s1");
+		assertThat(tool.calls()).isEqualTo(2);
+		assertThat(stored).extracting(Message::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT,
+					MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT);
+		assertThat(stored.get(3).getText()).isEqualTo("It is -125 degrees Celsius in Paris.");
+		assertThat(stored.get(4).getText()).contains("rejected by an automated evaluation", "<rejected_answer>");
+		assertThat(stored.get(7).getText()).isEqualTo("It is 15 degrees Celsius in Paris.");
+		// The round after the retry's tool call still carries the feedback.
+		assertThat(chatModel.userMessageOfCall(3)).contains("rejected by an automated evaluation");
+		this.model.verify();
+	}
+
+	@Test
+	void aRetryThatCallsAToolLosesFeedbackThatIsFilteredOutOfTheSession() {
+		// The tool loop rebuilds the prompt of each round from the session. A message
+		// filter that keeps the feedback prompt out of the session therefore drops it from
+		// the round after the tool call, and the model writes its second answer without
+		// it. This is why the feedback prompt must stay in the session.
+		expectEvaluation(FAILING);
+		expectEvaluation(PASSING);
+		SessionService sessionService = sessionService();
+		ScriptedChatModel chatModel = twoAttemptsWithTools();
+		MessageFilter withoutFeedback = MessageFilter.skipEmptyMessages()
+			.and(message -> !(message instanceof UserMessage
+					&& message.getText().contains("rejected by an automated evaluation")));
+
+		ChatClient.builder(chatModel)
+			.defaultTools(new WeatherTool("-125 degrees Celsius", "15 degrees Celsius"))
+			.defaultAdvisors(withSession(SessionAdvisors.builder(sessionService)
+				.memory(memory -> memory.messageFilter(withoutFeedback)), beforeTools()))
+			.build()
+			.prompt("What is the weather in Paris?")
+			.advisors(SessionAdvisors.session("s1"))
+			.call()
+			.content();
+
+		assertThat(sessionService.getMessages("s1")).extracting(Message::getMessageType)
+			.containsExactly(MessageType.USER, MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT,
+					MessageType.ASSISTANT, MessageType.TOOL, MessageType.ASSISTANT);
+		assertThat(chatModel.userMessageOfCall(2)).contains("rejected by an automated evaluation");
+		assertThat(chatModel.userMessageOfCall(3)).isEqualTo("What is the weather in Paris?");
+		this.model.verify();
+	}
+
 	/**
 	 * A tool whose result goes straight back to the caller.
 	 */
@@ -911,6 +1038,31 @@ class DecisionSelfRefineAdvisorTests {
 
 	private void expectEvaluation(Map<String, DecisionAnswer> answers) {
 		this.model.respondWith(answers);
+	}
+
+	/** Two attempts that each call the weather tool before they answer. */
+	private static ScriptedChatModel twoAttemptsWithTools() {
+		String toolCall = ScriptedChatModel.toolCall("weather", "{\"city\":\"Paris\"}");
+		return new ScriptedChatModel(toolCall, "It is -125 degrees Celsius in Paris.", toolCall,
+				"It is 15 degrees Celsius in Paris.");
+	}
+
+	private DecisionSelfRefineAdvisor beforeTools() {
+		return DecisionSelfRefineAdvisor.builder()
+			.judge(judge())
+			.order(DecisionSelfRefineAdvisor.BEFORE_TOOLS_ORDER)
+			.maxRepeatAttempts(3)
+			.build();
+	}
+
+	private static SessionService sessionService() {
+		return DefaultSessionService.builder().sessionRepository(InMemorySessionRepository.builder().build()).build();
+	}
+
+	private static List<Advisor> withSession(SessionAdvisors.Builder sessionAdvisors, Advisor advisor) {
+		List<Advisor> all = new ArrayList<>(sessionAdvisors.build());
+		all.add(advisor);
+		return all;
 	}
 
 }

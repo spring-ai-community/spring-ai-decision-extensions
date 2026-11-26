@@ -159,7 +159,7 @@ application advisors run at order `0`.
 | Order | The judge sees | A retry | Fits |
 |---|---|---|---|
 | `DEFAULT_ORDER` (`LOWEST_PRECEDENCE - 2000`), inside everything above | the retrieved context and the tool calls, read from the prompt | re-asks the model with the same context and tool history; retrieval and tools are **not** re-run | most chains, and anything with retrieval |
-| `BEFORE_TOOLS_ORDER` (`HIGHEST_PRECEDENCE + 250`), between memory and the tool loop | the tool calls, **recorded** during each attempt; **not** the retrieved context | re-runs the tools, so a tool that returned something wrong can return something else | tool-heavy chains without retrieval, where a bad tool result is the usual failure |
+| `BEFORE_TOOLS_ORDER` (`HIGHEST_PRECEDENCE + 250`), between chat memory and the tool loop | the tool calls, **recorded** during each attempt; **not** the retrieved context | re-runs the tools, so a tool that returned something wrong can return something else | tool-heavy chains without retrieval, where a bad tool result is the usual failure |
 
 Both positions sit inside chat memory at `HIGHEST_PRECEDENCE + 200`, so memory records only
 the answer finally returned.
@@ -168,9 +168,18 @@ the answer finally returned.
     Spring AI 2.1 deprecates `MessageChatMemoryAdvisor` in favour of the session advisors
     (`SessionAdvisors`). Those run in two places: the turn advisor at
     `HIGHEST_PRECEDENCE + 200`, and the memory advisor *inside* the tool loop, at
-    `HIGHEST_PRECEDENCE + 1000`. Both are outside this advisor's default order. At
-    `BEFORE_TOOLS_ORDER`, however, the session memory advisor is inside the retry loop, so
-    it sees every attempt and not only the final answer.
+    `HIGHEST_PRECEDENCE + 1000`. Both are outside this advisor's default order, so the
+    session keeps only the final answer.
+
+    At `BEFORE_TOOLS_ORDER`, however, the session memory advisor is inside the retry loop,
+    and the session keeps every attempt: the rejected answer, its tool calls and results,
+    and the retry's feedback prompt as a user message. All of it comes back as history on
+    later turns. With session memory, prefer the default order unless a retry has to call
+    the tools again.
+
+    Do not filter the feedback prompt out of the session with a `MessageFilter`. The tool
+    loop rebuilds the prompt of each round from the session, so a retry that calls a tool
+    would write its answer without the feedback.
 
 At `BEFORE_TOOLS_ORDER` the attempt's tool traffic never reaches this advisor's prompt, so
 it is recorded instead: for each attempt, the request's tool callbacks are wrapped, and
